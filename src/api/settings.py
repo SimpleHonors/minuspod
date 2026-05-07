@@ -140,6 +140,16 @@ def get_settings():
     vad_gap_mid = _db_float('vad_gap_mid_min_seconds', default_vad_gap_mid)
     vad_gap_tail = _db_float('vad_gap_tail_min_seconds', default_vad_gap_tail)
 
+    def _db_int(key, default):
+        try:
+            return int(_setting_value(settings, key, default))
+        except (ValueError, TypeError):
+            return default
+
+    transcribe_max_chunk_seconds = _db_int('transcribe_max_chunk_seconds', 600)
+    transcribe_concurrent_chunks = _db_int('transcribe_concurrent_chunks', 4)
+    transcribe_chunk_overlap_seconds = _db_int('transcribe_chunk_overlap_seconds', 30)
+
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT)),
         'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT)),
@@ -169,6 +179,9 @@ def get_settings():
         'vadGapStartMinSeconds': _sv('vad_gap_start_min_seconds', vad_gap_start),
         'vadGapMidMinSeconds': _sv('vad_gap_mid_min_seconds', vad_gap_mid),
         'vadGapTailMinSeconds': _sv('vad_gap_tail_min_seconds', vad_gap_tail),
+        'transcribeMaxChunkSeconds': _sv('transcribe_max_chunk_seconds', transcribe_max_chunk_seconds),
+        'transcribeConcurrentChunks': _sv('transcribe_concurrent_chunks', transcribe_concurrent_chunks),
+        'transcribeChunkOverlapSeconds': _sv('transcribe_chunk_overlap_seconds', transcribe_chunk_overlap_seconds),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
         'defaults': {
@@ -196,6 +209,9 @@ def get_settings():
             'vadGapStartMinSeconds': default_vad_gap_start,
             'vadGapMidMinSeconds': default_vad_gap_mid,
             'vadGapTailMinSeconds': default_vad_gap_tail,
+            'transcribeMaxChunkSeconds': 600,
+            'transcribeConcurrentChunks': 4,
+            'transcribeChunkOverlapSeconds': 30,
         }
     })
 
@@ -414,6 +430,25 @@ def update_ad_detection_settings():
             return json_response({'error': f'{field_name} must be a positive number'}, 400)
         if value <= 0:
             return json_response({'error': f'{field_name} must be a positive number'}, 400)
+        db.set_setting(db_key, str(value), is_default=False)
+        logger.info(f"Updated {db_key} to: {value}")
+
+    # Chunked transcription tuning (parallel API path).
+    for field_name, db_key, max_val in (
+        ('transcribeMaxChunkSeconds', 'transcribe_max_chunk_seconds', 7200),
+        ('transcribeConcurrentChunks', 'transcribe_concurrent_chunks', 32),
+        ('transcribeChunkOverlapSeconds', 'transcribe_chunk_overlap_seconds', 600),
+    ):
+        if field_name not in data:
+            continue
+        try:
+            value = int(data[field_name])
+        except (TypeError, ValueError):
+            return json_response({'error': f'{field_name} must be a positive integer'}, 400)
+        if value < 1 or value > max_val:
+            return json_response(
+                {'error': f'{field_name} must be between 1 and {max_val}'}, 400
+            )
         db.set_setting(db_key, str(value), is_default=False)
         logger.info(f"Updated {db_key} to: {value}")
 

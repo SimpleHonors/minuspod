@@ -1356,6 +1356,26 @@ class SchemaMixin:
             ('verification_model', env_model or DEFAULT_MODEL)
         )
 
+        # Chunked transcription tuning (parallel API path).
+        # max_chunk_seconds: 600 for Whisper-class backends, 28 for Parakeet (30s ONNX cap).
+        # concurrent_chunks: match backend's worker count (Parakeet=4, whisper.cpp ~1).
+        # chunk_overlap_seconds: dedupe overlap at chunk boundaries.
+        conn.execute(
+            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
+               ON CONFLICT(key) DO NOTHING""",
+            ('transcribe_max_chunk_seconds', '600')
+        )
+        conn.execute(
+            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
+               ON CONFLICT(key) DO NOTHING""",
+            ('transcribe_concurrent_chunks', '4')
+        )
+        conn.execute(
+            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
+               ON CONFLICT(key) DO NOTHING""",
+            ('transcribe_chunk_overlap_seconds', '30')
+        )
+
         # Migrate old second_pass settings to verification settings
         try:
             old_prompt = None

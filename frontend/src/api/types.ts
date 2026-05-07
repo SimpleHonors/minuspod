@@ -138,6 +138,9 @@ export interface Settings {
   whisperApiModel: SettingValue;
   whisperLanguage: SettingValue;
   whisperComputeType: SettingValue;
+  transcribeMaxChunkSeconds: SettingValueNumber;
+  transcribeConcurrentChunks: SettingValueNumber;
+  transcribeChunkOverlapSeconds: SettingValueNumber;
   llmProvider: SettingValue;
   openaiBaseUrl: SettingValue;
   apiKeyConfigured: boolean;
@@ -165,6 +168,9 @@ export interface Settings {
     whisperApiModel: string;
     whisperLanguage: string;
     whisperComputeType: string;
+    transcribeMaxChunkSeconds: number;
+    transcribeConcurrentChunks: number;
+    transcribeChunkOverlapSeconds: number;
   };
 }
 
@@ -190,6 +196,9 @@ export interface UpdateSettingsPayload {
   whisperApiModel?: string;
   whisperLanguage?: string;
   whisperComputeType?: string;
+  transcribeMaxChunkSeconds?: number;
+  transcribeConcurrentChunks?: number;
+  transcribeChunkOverlapSeconds?: number;
   podcastIndexApiKey?: string;
   podcastIndexApiSecret?: string;
 }

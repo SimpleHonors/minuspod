@@ -68,6 +68,9 @@ function Settings() {
   });
   const [whisperLanguage, setWhisperLanguage] = useState('en');
   const [whisperComputeType, setWhisperComputeType] = useState('auto');
+  const [transcribeMaxChunkSeconds, setTranscribeMaxChunkSeconds] = useState(600);
+  const [transcribeConcurrentChunks, setTranscribeConcurrentChunks] = useState(4);
+  const [transcribeChunkOverlapSeconds, setTranscribeChunkOverlapSeconds] = useState(30);
   const [providersState, setProvidersState] = useState<ProvidersResponse | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
@@ -240,6 +243,9 @@ function Settings() {
       });
       setWhisperLanguage(settings.whisperLanguage?.value || 'en');
       setWhisperComputeType(settings.whisperComputeType?.value || 'auto');
+      setTranscribeMaxChunkSeconds(settings.transcribeMaxChunkSeconds?.value ?? 600);
+      setTranscribeConcurrentChunks(settings.transcribeConcurrentChunks?.value ?? 4);
+      setTranscribeChunkOverlapSeconds(settings.transcribeChunkOverlapSeconds?.value ?? 30);
     }
   }
 
@@ -266,9 +272,12 @@ function Settings() {
       whisperApiConfig.model !== (settings.whisperApiModel?.value || 'whisper-1') ||
       whisperLanguage !== (settings.whisperLanguage?.value || 'en') ||
       whisperComputeType !== (settings.whisperComputeType?.value || 'auto') ||
+      transcribeMaxChunkSeconds !== (settings.transcribeMaxChunkSeconds?.value ?? 600) ||
+      transcribeConcurrentChunks !== (settings.transcribeConcurrentChunks?.value ?? 4) ||
+      transcribeChunkOverlapSeconds !== (settings.transcribeChunkOverlapSeconds?.value ?? 30) ||
       (podcastIndexApiKey !== '' && podcastIndexApiSecret !== '')
     );
-  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, podcastIndexApiKey, podcastIndexApiSecret, settings]);
+  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, podcastIndexApiKey, podcastIndexApiSecret, settings]);
 
   const updateMutation = useMutation({
     mutationFn: () =>
@@ -293,6 +302,9 @@ function Settings() {
         whisperApiModel: whisperApiConfig.model,
         whisperLanguage,
         whisperComputeType,
+        transcribeMaxChunkSeconds,
+        transcribeConcurrentChunks,
+        transcribeChunkOverlapSeconds,
         ...(podcastIndexApiKey ? { podcastIndexApiKey } : {}),
         ...(podcastIndexApiSecret ? { podcastIndexApiSecret } : {}),
       }),
@@ -448,6 +460,12 @@ function Settings() {
         onWhisperLanguageChange={setWhisperLanguage}
         whisperComputeType={whisperComputeType}
         onWhisperComputeTypeChange={setWhisperComputeType}
+        transcribeMaxChunkSeconds={transcribeMaxChunkSeconds}
+        onTranscribeMaxChunkSecondsChange={setTranscribeMaxChunkSeconds}
+        transcribeConcurrentChunks={transcribeConcurrentChunks}
+        onTranscribeConcurrentChunksChange={setTranscribeConcurrentChunks}
+        transcribeChunkOverlapSeconds={transcribeChunkOverlapSeconds}
+        onTranscribeChunkOverlapSecondsChange={setTranscribeChunkOverlapSeconds}
         softTimeoutMinutes={softTimeoutMinutes}
         hardTimeoutMinutes={hardTimeoutMinutes}
         softMinMinutes={processingTimeouts ? Math.max(1, Math.ceil(processingTimeouts.limits.softMin / 60)) : 5}
