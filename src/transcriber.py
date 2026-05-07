@@ -748,6 +748,16 @@ class Transcriber:
                 )
 
             if response is None or response.status_code >= 400:
+                if response is not None:
+                    logger.error(
+                        "Whisper API failed: status=%s body=%r",
+                        response.status_code,
+                        response.text[:500],
+                    )
+                else:
+                    logger.error(
+                        "Whisper API failed: response is None (all attempts exhausted)"
+                    )
                 return None
 
             # Parse verbose_json response
