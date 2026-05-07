@@ -669,8 +669,15 @@ class Transcriber:
                             pass
                     flac_path = None
 
-            # Build request
-            url = f"{base_url.rstrip('/')}/audio/transcriptions"
+            # Build request. Allow base_url to be configured either with or
+            # without a trailing /v1 segment: vLLM (and OpenAI itself) only
+            # serve /v1/audio/transcriptions, while existing deployments
+            # commonly set whisper_api_base_url to bare host:port. Auto-append
+            # /v1 when missing so both conventions work.
+            _base = base_url.rstrip('/')
+            if not _base.endswith('/v1'):
+                _base = f"{_base}/v1"
+            url = f"{_base}/audio/transcriptions"
             initial_prompt = self.get_initial_prompt(podcast_name)
 
             headers = {}
