@@ -141,6 +141,8 @@ export interface Settings {
   transcribeMaxChunkSeconds: SettingValueNumber;
   transcribeConcurrentChunks: SettingValueNumber;
   transcribeChunkOverlapSeconds: SettingValueNumber;
+  audioNormalizeEnabled: SettingValueBoolean;
+  audioNormalizeIntensity: SettingValue;
   llmProvider: SettingValue;
   openaiBaseUrl: SettingValue;
   apiKeyConfigured: boolean;
@@ -171,6 +173,8 @@ export interface Settings {
     transcribeMaxChunkSeconds: number;
     transcribeConcurrentChunks: number;
     transcribeChunkOverlapSeconds: number;
+    audioNormalizeEnabled: boolean;
+    audioNormalizeIntensity: string;
   };
 }
 
@@ -199,6 +203,8 @@ export interface UpdateSettingsPayload {
   transcribeMaxChunkSeconds?: number;
   transcribeConcurrentChunks?: number;
   transcribeChunkOverlapSeconds?: number;
+  audioNormalizeEnabled?: boolean;
+  audioNormalizeIntensity?: string;
   podcastIndexApiKey?: string;
   podcastIndexApiSecret?: string;
 }

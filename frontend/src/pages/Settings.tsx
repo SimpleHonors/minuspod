@@ -71,6 +71,8 @@ function Settings() {
   const [transcribeMaxChunkSeconds, setTranscribeMaxChunkSeconds] = useState(600);
   const [transcribeConcurrentChunks, setTranscribeConcurrentChunks] = useState(4);
   const [transcribeChunkOverlapSeconds, setTranscribeChunkOverlapSeconds] = useState(30);
+  const [audioNormalizeEnabled, setAudioNormalizeEnabled] = useState(false);
+  const [audioNormalizeIntensity, setAudioNormalizeIntensity] = useState('aggressive');
   const [providersState, setProvidersState] = useState<ProvidersResponse | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
@@ -246,6 +248,8 @@ function Settings() {
       setTranscribeMaxChunkSeconds(settings.transcribeMaxChunkSeconds?.value ?? 600);
       setTranscribeConcurrentChunks(settings.transcribeConcurrentChunks?.value ?? 4);
       setTranscribeChunkOverlapSeconds(settings.transcribeChunkOverlapSeconds?.value ?? 30);
+      setAudioNormalizeEnabled(settings.audioNormalizeEnabled?.value ?? false);
+      setAudioNormalizeIntensity(settings.audioNormalizeIntensity?.value || 'aggressive');
     }
   }
 
@@ -275,9 +279,11 @@ function Settings() {
       transcribeMaxChunkSeconds !== (settings.transcribeMaxChunkSeconds?.value ?? 600) ||
       transcribeConcurrentChunks !== (settings.transcribeConcurrentChunks?.value ?? 4) ||
       transcribeChunkOverlapSeconds !== (settings.transcribeChunkOverlapSeconds?.value ?? 30) ||
+      audioNormalizeEnabled !== (settings.audioNormalizeEnabled?.value ?? false) ||
+      audioNormalizeIntensity !== (settings.audioNormalizeIntensity?.value || 'aggressive') ||
       (podcastIndexApiKey !== '' && podcastIndexApiSecret !== '')
     );
-  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, podcastIndexApiKey, podcastIndexApiSecret, settings]);
+  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, audioNormalizeEnabled, audioNormalizeIntensity, podcastIndexApiKey, podcastIndexApiSecret, settings]);
 
   const updateMutation = useMutation({
     mutationFn: () =>
@@ -305,6 +311,8 @@ function Settings() {
         transcribeMaxChunkSeconds,
         transcribeConcurrentChunks,
         transcribeChunkOverlapSeconds,
+        audioNormalizeEnabled,
+        audioNormalizeIntensity,
         ...(podcastIndexApiKey ? { podcastIndexApiKey } : {}),
         ...(podcastIndexApiSecret ? { podcastIndexApiSecret } : {}),
       }),
@@ -500,6 +508,10 @@ function Settings() {
       <AudioSection
         audioBitrate={audioBitrate}
         onAudioBitrateChange={setAudioBitrate}
+        audioNormalizeEnabled={audioNormalizeEnabled}
+        onAudioNormalizeEnabledChange={setAudioNormalizeEnabled}
+        audioNormalizeIntensity={audioNormalizeIntensity}
+        onAudioNormalizeIntensityChange={setAudioNormalizeIntensity}
       />
 
       <Podcasting20Section

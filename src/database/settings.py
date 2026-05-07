@@ -111,6 +111,8 @@ class SettingsMixin:
             'vad_gap_start_min_seconds': os.environ.get('VAD_GAP_START_MIN_SECONDS', '3.0'),
             'vad_gap_mid_min_seconds': os.environ.get('VAD_GAP_MID_MIN_SECONDS', '8.0'),
             'vad_gap_tail_min_seconds': os.environ.get('VAD_GAP_TAIL_MIN_SECONDS', '3.0'),
+            'audio_normalize_enabled': 'false',
+            'audio_normalize_intensity': 'aggressive',
         }
 
         if key in defaults:

@@ -150,6 +150,10 @@ def get_settings():
     transcribe_concurrent_chunks = _db_int('transcribe_concurrent_chunks', 4)
     transcribe_chunk_overlap_seconds = _db_int('transcribe_chunk_overlap_seconds', 30)
 
+    audio_normalize_enabled_raw = _setting_value(settings, 'audio_normalize_enabled', 'false')
+    audio_normalize_enabled = str(audio_normalize_enabled_raw).lower() in ('true', '1', 'yes')
+    audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'aggressive')
+
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT)),
         'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT)),
@@ -182,6 +186,8 @@ def get_settings():
         'transcribeMaxChunkSeconds': _sv('transcribe_max_chunk_seconds', transcribe_max_chunk_seconds),
         'transcribeConcurrentChunks': _sv('transcribe_concurrent_chunks', transcribe_concurrent_chunks),
         'transcribeChunkOverlapSeconds': _sv('transcribe_chunk_overlap_seconds', transcribe_chunk_overlap_seconds),
+        'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
+        'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
         'defaults': {
@@ -212,6 +218,8 @@ def get_settings():
             'transcribeMaxChunkSeconds': 600,
             'transcribeConcurrentChunks': 4,
             'transcribeChunkOverlapSeconds': 30,
+            'audioNormalizeEnabled': False,
+            'audioNormalizeIntensity': 'aggressive',
         }
     })
 
@@ -292,6 +300,21 @@ def update_ad_detection_settings():
         value = max(0.50, min(0.95, float(data['minCutConfidence'])))
         db.set_setting('min_cut_confidence', str(value), is_default=False)
         logger.info(f"Updated min cut confidence to: {value}")
+
+    if 'audioNormalizeEnabled' in data:
+        value = 'true' if data['audioNormalizeEnabled'] else 'false'
+        db.set_setting('audio_normalize_enabled', value, is_default=False)
+        logger.info(f"Updated audio normalize enabled to: {value}")
+
+    if 'audioNormalizeIntensity' in data:
+        valid_intensities = ('gentle', 'normal', 'aggressive')
+        if data['audioNormalizeIntensity'] not in valid_intensities:
+            return json_response(
+                {'error': f'audioNormalizeIntensity must be one of: {", ".join(valid_intensities)}'},
+                400,
+            )
+        db.set_setting('audio_normalize_intensity', data['audioNormalizeIntensity'], is_default=False)
+        logger.info(f"Updated audio normalize intensity to: {data['audioNormalizeIntensity']}")
 
     provider_changed = False
     if 'llmProvider' in data:
@@ -503,6 +526,8 @@ def reset_ad_detection_settings():
     db.reset_setting('vad_gap_start_min_seconds')
     db.reset_setting('vad_gap_mid_min_seconds')
     db.reset_setting('vad_gap_tail_min_seconds')
+    db.reset_setting('audio_normalize_enabled')
+    db.reset_setting('audio_normalize_intensity')
 
     # Recreate LLM client with reset settings
     client = get_llm_client(force_new=True)
