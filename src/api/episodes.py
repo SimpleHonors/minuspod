@@ -230,6 +230,38 @@ def get_original_transcript(slug, episode_id):
     })
 
 
+@api.route('/feeds/<slug>/episodes/<episode_id>/original-segments', methods=['GET'])
+@log_request
+def get_original_segments(slug, episode_id):
+    """Get original (pre-cut) Whisper segments JSON for an episode."""
+    db = get_database()
+
+    segments = db.get_original_segments(slug, episode_id)
+    if segments is None:
+        return error_response('Original segments not found', 404)
+
+    return json_response({
+        'episodeId': episode_id,
+        'segments': segments
+    })
+
+
+@api.route('/feeds/<slug>/episodes/<episode_id>/final-segments', methods=['GET'])
+@log_request
+def get_final_segments(slug, episode_id):
+    """Get final (post-cut) segments JSON for an episode."""
+    db = get_database()
+
+    segments = db.get_final_segments(slug, episode_id)
+    if segments is None:
+        return error_response('Final segments not found', 404)
+
+    return json_response({
+        'episodeId': episode_id,
+        'segments': segments
+    })
+
+
 @api.route('/feeds/<slug>/episodes/<episode_id>/original.mp3', methods=['GET'])
 @log_request
 def serve_original_audio(slug, episode_id):
@@ -424,7 +456,7 @@ def regenerate_chapters(slug, episode_id):
         return error_response('No VTT transcript available - full reprocess required', 400)
 
     # Parse VTT back to segments
-    segments = _parse_vtt_to_segments(vtt_content)
+    segments = parse_vtt_to_segments(vtt_content)
     if not segments:
         return error_response('Failed to parse VTT transcript', 500)
 
@@ -477,7 +509,7 @@ def regenerate_chapters(slug, episode_id):
         return error_response('Failed to regenerate chapters', 500)
 
 
-def _parse_vtt_to_segments(vtt_content: str) -> list:
+def parse_vtt_to_segments(vtt_content: str) -> list:
     """Parse VTT content back to segment list."""
     segments = []
 
