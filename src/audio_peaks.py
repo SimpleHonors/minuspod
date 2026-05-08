@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 
@@ -22,8 +22,10 @@ from utils.subprocess_registry import tracked_run
 logger = logging.getLogger('podcast.peaks')
 
 PEAKS_SAMPLE_RATE_HZ = 8000   # mono downsample target — only need amplitude
-PEAKS_TIMEOUT_SECONDS = 30
-MAX_PEAKS_DURATION_SECONDS = 60 * 60  # 1h cap per request — bigger windows are fetched in pieces
+PEAKS_TIMEOUT_SECONDS = 60
+MAX_PEAKS_DURATION_SECONDS = 4 * 60 * 60  # hard ceiling: 4h. Episodes longer
+# than that are extreme outliers; refuse rather than spend a minute decoding.
+MAX_PEAK_BUCKETS = 60_000     # keep JSON payload manageable (~600 KB at 4 dp)
 
 
 class PeaksError(RuntimeError):
@@ -33,8 +35,13 @@ class PeaksError(RuntimeError):
 def compute_peaks(audio_path: Path | str,
                   start_seconds: float = 0.0,
                   end_seconds: float | None = None,
-                  resolution_ms: int = 50) -> List[float]:
-    """Return one peak in [0, 1] per ``resolution_ms`` chunk for the window.
+                  resolution_ms: int = 50) -> Tuple[List[float], int]:
+    """Return ``(peaks, effective_resolution_ms)`` for the window.
+
+    Each peak is in [0, 1] and represents one ``effective_resolution_ms``
+    chunk of audio. The effective resolution may be coarser than the
+    requested one when the window is so long that honoring the request
+    would exceed ``MAX_PEAK_BUCKETS`` (caller learns the true value).
 
     Args:
         audio_path: Path to the source audio file (any format ffmpeg reads).
@@ -64,6 +71,15 @@ def compute_peaks(audio_path: Path | str,
         if duration > MAX_PEAKS_DURATION_SECONDS:
             raise PeaksError(
                 f"window {duration:.0f}s exceeds {MAX_PEAKS_DURATION_SECONDS}s cap")
+        # Auto-scale resolution so the response stays under MAX_PEAK_BUCKETS.
+        # The user-supplied resolution_ms is treated as a *minimum fidelity*;
+        # we coarsen as needed for very long windows so the JSON doesn't
+        # balloon. Wavesurfer renders a couple of pixels per peak, so 60k
+        # buckets is plenty even at 20× zoom.
+        max_buckets_at_request_res = (duration * 1000) / resolution_ms
+        if max_buckets_at_request_res > MAX_PEAK_BUCKETS:
+            scaled = int(((duration * 1000) / MAX_PEAK_BUCKETS) + 0.5)
+            resolution_ms = min(1000, max(resolution_ms, scaled))
 
     cmd = [
         'ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin',
@@ -93,9 +109,9 @@ def compute_peaks(audio_path: Path | str,
 
     n_buckets = len(samples) // samples_per_bucket
     if n_buckets == 0:
-        return []
+        return [], resolution_ms
 
     trimmed = samples[: n_buckets * samples_per_bucket].reshape(-1, samples_per_bucket)
     # Peak amplitude per bucket, normalized to [0, 1]. int16 max abs is 32768.
     peaks = (np.abs(trimmed).max(axis=1).astype(np.float32) / 32768.0)
-    return peaks.tolist()
+    return peaks.tolist(), resolution_ms

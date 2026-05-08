@@ -302,7 +302,7 @@ def get_episode_peaks(slug, episode_id):
 
     from audio_peaks import compute_peaks, PeaksError
     try:
-        peaks = compute_peaks(
+        peaks, effective_resolution_ms = compute_peaks(
             path,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
@@ -315,7 +315,10 @@ def get_episode_peaks(slug, episode_id):
         'episodeId': episode_id,
         'start': start_seconds,
         'end': end_seconds,
-        'resolutionMs': resolution_ms,
+        # Echo the *effective* resolution. Server auto-coarsens for very
+        # long windows so the JSON payload stays bounded; callers should
+        # render based on this value, not the one they requested.
+        'resolutionMs': effective_resolution_ms,
         'peaks': peaks,
     })
 

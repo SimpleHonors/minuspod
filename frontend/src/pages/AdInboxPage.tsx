@@ -48,6 +48,10 @@ function statusPillClass(status: InboxItem['status']): string {
   }
 }
 
+function itemKey(it: { podcastSlug: string; episodeId: string; adIndex: number }): string {
+  return `${it.podcastSlug}:${it.episodeId}:${it.adIndex}`;
+}
+
 function AdInboxPage() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<InboxStatusFilter>('pending');
@@ -56,6 +60,11 @@ function AdInboxPage() {
   // of the pending list — using the item itself + a `key` prop on the
   // modal guarantees a clean remount per item with fresh state.
   const [activeItem, setActiveItem] = useState<InboxItem | null>(null);
+  // Session-only skip set: keeps the user from being bounced back to
+  // ads they explicitly skipped during this triage pass. Cleared on
+  // page reload, so DB stays the source of truth.
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [showSkipped, setShowSkipped] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ad-inbox', status],
@@ -63,7 +72,11 @@ function AdInboxPage() {
     staleTime: 5_000,
   });
 
-  const items = data?.items ?? [];
+  const allItems = data?.items ?? [];
+  const items = showSkipped
+    ? allItems
+    : allItems.filter((it) => !skipped.has(itemKey(it)));
+  const skippedCount = allItems.length - items.length;
   const counts = data?.counts;
 
   const closeModal = () => setActiveItem(null);
@@ -84,6 +97,27 @@ function AdInboxPage() {
     const next = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
     setActiveItem(next);
     queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
+  };
+
+  const handleSkip = () => {
+    if (!activeItem) return;
+    const key = itemKey(activeItem);
+    // Mark skipped first, then advance using the remaining queue. The
+    // current activeItem is filtered OUT of the next list, so we want
+    // the item that follows it in the original list.
+    setSkipped((s) => {
+      const next = new Set(s);
+      next.add(key);
+      return next;
+    });
+    const idx = items.findIndex(
+      (i) =>
+        i.podcastSlug === activeItem.podcastSlug &&
+        i.episodeId === activeItem.episodeId &&
+        i.adIndex === activeItem.adIndex,
+    );
+    const next = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
+    setActiveItem(next);
   };
 
   return (
@@ -128,7 +162,41 @@ function AdInboxPage() {
             </button>
           );
         })}
+        {(skipped.size > 0 || showSkipped) && (
+          <button
+            type="button"
+            onClick={() => setShowSkipped((v) => !v)}
+            className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ml-2 ${
+              showSkipped
+                ? 'bg-amber-500/15 text-amber-500 border-amber-500/30'
+                : 'bg-card text-muted-foreground border-border hover:bg-accent'
+            }`}
+            title={
+              showSkipped
+                ? 'Hide ads you skipped this session'
+                : 'Show ads you skipped this session (still in the inbox)'
+            }
+          >
+            {showSkipped ? 'Hide skipped' : `Show skipped (${skipped.size})`}
+          </button>
+        )}
+        {skipped.size > 0 && (
+          <button
+            type="button"
+            onClick={() => setSkipped(new Set())}
+            className="px-3 py-1.5 rounded-lg border text-sm text-muted-foreground border-border bg-card hover:bg-accent transition-colors"
+            title="Clear the session skip list"
+          >
+            Clear skip list
+          </button>
+        )}
       </div>
+
+      {skippedCount > 0 && !showSkipped && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          {skippedCount} skipped this session — still pending in the inbox.
+        </p>
+      )}
 
       {isLoading ? (
         <LoadingSpinner className="py-12" />
@@ -194,10 +262,11 @@ function AdInboxPage() {
 
       {activeItem && (
         <AdReviewModal
-          key={`${activeItem.podcastSlug}:${activeItem.episodeId}:${activeItem.adIndex}`}
+          key={itemKey(activeItem)}
           item={activeItem}
           onClose={closeModal}
           onSaveAndNext={handleSaveAndNext}
+          onSkip={handleSkip}
         />
       )}
     </div>

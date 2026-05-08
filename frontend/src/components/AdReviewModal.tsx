@@ -14,6 +14,9 @@ interface Props {
   item: InboxItem;
   onClose: () => void;
   onSaveAndNext: () => void;
+  // Advance without mutating the DB. Item stays in pending; UI filters it
+  // out of this session's queue so the user isn't bounced back to it.
+  onSkip: () => void;
 }
 
 const CONTEXT_SECONDS = 120;
@@ -155,7 +158,7 @@ function Pin({
 
 // ----------------------------------------------------------------------
 
-function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
+function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
   const scrollContainerRef = useRef<HTMLDivElement>(null); // overflow-x-auto wrapper
@@ -244,6 +247,23 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
 
     regionsRef.current = regions;
     wsRef.current = ws;
+
+    // wavesurfer 7 wraps its canvas in a scroll-container that grows an
+    // overflow-x: auto scrollbar when minPxPerSec * duration > parent width.
+    // We already wrap the whole thing in our own overflow-x-auto container
+    // (so the pin overlay scrolls in lockstep with the waveform), so the
+    // inner one is duplicate. Force it transparent.
+    const stripInnerScroll = () => {
+      const inner = containerRef.current?.firstElementChild as HTMLElement | null;
+      if (inner) {
+        inner.style.overflow = 'visible';
+        inner.style.overflowX = 'visible';
+        inner.style.overflowY = 'visible';
+      }
+    };
+    stripInnerScroll();
+    ws.on('redraw', stripInnerScroll);
+    ws.on('ready', stripInnerScroll);
 
     const region = regions.addRegion({
       start: Math.max(0, adStart - windowStart),
@@ -531,6 +551,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       if (e.key === '.')      { e.preventDefault(); expandForward(); return; }
       if (e.key === 'c' || e.key === 'C') { e.preventDefault(); if (!isBusy) handleConfirm(); return; }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); if (!isBusy) handleReject(); return; }
+      if (e.key === 's' || e.key === 'S') { e.preventDefault(); if (!isBusy) onSkip(); return; }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const audio = audioRef.current;
         if (!audio) return;
@@ -786,7 +807,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
           <div className="mt-2 text-xs text-muted-foreground">
             Drag the <span className="text-emerald-500 font-semibold">START</span> /{' '}
             <span className="text-rose-500 font-semibold">END</span> pins above the waveform.{' '}
-            <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • <kbd>C</kbd> confirm • <kbd>R</kbd> reject
+            <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • mouse-wheel to zoom • <kbd>C</kbd> confirm • <kbd>R</kbd> reject • <kbd>S</kbd> skip
           </div>
         </div>
 
@@ -822,6 +843,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
               : 'Confirm will record this ad as-detected.'}
           </div>
           <div className="flex items-center gap-2">
+            <button type="button" onClick={onSkip} disabled={isBusy}
+              className={`px-4 py-1.5 rounded-lg ${ghostBtn} text-sm`}
+              title="Skip — leave in inbox, hide from this session (S)">
+              Skip & Next
+            </button>
             <button type="button" onClick={handleReject} disabled={isBusy}
               className={`px-4 py-1.5 rounded-lg ${destructiveBtn} text-sm`}
               title="Mark as not an ad and advance (R)">
