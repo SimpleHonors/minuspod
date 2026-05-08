@@ -948,6 +948,15 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
             <span className="tabular-nums w-10 text-right">{zoom.toFixed(1)}×</span>
           </div>
 
+          {/* Debug strip — removable once verified. */}
+          <div className="mt-2 px-2 py-1 rounded bg-secondary/30 text-[10px] text-muted-foreground font-mono">
+            win {formatTime(windowStart)}–{formatTime(effectiveWindowEnd)}
+            ({windowDuration.toFixed(1)}s, req {requestedWindowDuration.toFixed(1)}s)
+            • peaks {peaks?.length ?? 0} @ {peakResolutionMs}ms
+            • pins start {(((adStart - windowStart) / windowDuration) * 100).toFixed(1)}% end {(((adEnd - windowStart) / windowDuration) * 100).toFixed(1)}%
+            • zoom {zoom.toFixed(2)}×
+          </div>
+
           {/* Boundaries readout */}
           <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground tabular-nums">
             <span>
