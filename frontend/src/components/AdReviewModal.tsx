@@ -19,7 +19,7 @@ interface Props {
   onSkip: () => void;
 }
 
-const CONTEXT_SECONDS = 60;
+const CONTEXT_SECONDS = 30;
 // Cap the default visible window. Some heuristic detections (notably
 // post-roll) flag dozens of minutes as a single "ad", which would make
 // the default fit-zoom view useless (whole episode squeezed into one
