@@ -255,24 +255,36 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     // styling to be visible. Use setProperty(important) because wavesurfer
     // sets these as inline styles which a plain assignment can't override.
     const stripInnerScroll = () => {
+      // Wavesurfer 7 mounts a div as containerRef's first child and
+      // attaches an open shadow root TO THAT DIV (not to containerRef
+      // itself). Walk through both layers.
       const host = containerRef.current;
-      const root: ShadowRoot | HTMLElement | null = host?.shadowRoot ?? host;
-      if (!root) return;
-      root.querySelectorAll('*').forEach((el) => {
-        const e = el as HTMLElement;
-        // Only touch elements that actually have an overflow style applied
-        // (avoids resetting children that are content-sized).
-        if (
-          e.style.overflow || e.style.overflowX || e.style.overflowY
-        ) {
-          e.style.setProperty('overflow', 'visible', 'important');
-          e.style.setProperty('overflow-x', 'visible', 'important');
-          e.style.setProperty('overflow-y', 'visible', 'important');
-        }
-      });
-      // Also kill scroll on the host element itself just in case.
-      if (host) {
-        host.style.setProperty('overflow', 'visible', 'important');
+      if (!host) return;
+      const wsHost = host.firstElementChild as HTMLElement | null;
+      if (wsHost) {
+        wsHost.style.setProperty('overflow', 'visible', 'important');
+      }
+      const shadow = wsHost?.shadowRoot ?? null;
+      const roots: (ShadowRoot | HTMLElement)[] = shadow ? [shadow, host] : [host];
+      for (const root of roots) {
+        root.querySelectorAll('*').forEach((el) => {
+          const e = el as HTMLElement;
+          if (e.style?.overflow || e.style?.overflowX || e.style?.overflowY) {
+            e.style.setProperty('overflow', 'visible', 'important');
+            e.style.setProperty('overflow-x', 'visible', 'important');
+            e.style.setProperty('overflow-y', 'visible', 'important');
+          }
+        });
+      }
+      // Belt-and-suspenders: also inject a !important rule into the
+      // shadow root so any post-render restyling is overridden too.
+      if (shadow && !shadow.querySelector('style[data-no-inner-scroll]')) {
+        const style = document.createElement('style');
+        style.setAttribute('data-no-inner-scroll', '1');
+        style.textContent = `
+          ::part(scroll), div { overflow: visible !important; overflow-x: visible !important; overflow-y: visible !important; }
+        `;
+        shadow.appendChild(style);
       }
     };
     stripInnerScroll();
