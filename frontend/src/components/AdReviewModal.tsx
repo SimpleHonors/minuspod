@@ -19,7 +19,7 @@ interface Props {
   onSkip: () => void;
 }
 
-const CONTEXT_SECONDS = 120;
+const CONTEXT_SECONDS = 60;
 const WINDOW_STEP_SECONDS = 60;
 // 100ms buckets — 4× fewer peaks than the prior 50ms default. Still plenty
 // of detail to see speech vs. silence at any reasonable zoom level, and
@@ -130,46 +130,48 @@ function Pin({
 
   if (!visible) return null;
 
+  // All offsets are positive within the pin's box so the pinhead lives
+  // INSIDE the parent overlay's bounds. (Negative offsets get clipped by
+  // the parent scroll container, since `overflow-x: auto` forces
+  // `overflow-y` to also clip per CSS spec.)
+
   return (
     <div
       onPointerDown={onPointerDown}
       style={{
         left: `${leftPct}%`,
-        // Disable browser touch gestures (page scroll, pinch-zoom) while
-        // the user is dragging the pin. Without this mobile pulls the
-        // page instead of moving the pin.
-        touchAction: 'none',
+        touchAction: 'none', // mobile: don't scroll the page while dragging
       }}
-      className={`absolute top-0 bottom-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
+      className={`absolute inset-y-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
         dragging ? 'cursor-grabbing' : ''
       }`}
       role="slider"
       aria-label={`${labelText} pin`}
       aria-valuenow={Math.round(boundary * 10) / 10}
     >
-      {/* Vertical line / stem */}
+      {/* Pinhead — pill at the top of the pin's box (top: 0). */}
       <div
-        className={`w-0.5 h-full ${color} ${dragging ? 'opacity-100' : 'opacity-90'} mx-auto shadow-md`}
-      />
-      {/* Pinhead — pill at the top with the label + time. Sized for
-          mobile (>=44px tall hit zone via the wrapping anchor below). */}
-      <div
-        className={`absolute -top-9 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white ${color} text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap ${
+        className={`absolute top-0 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white ${color} text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap ${
           dragging ? `ring-4 ${ringColor} scale-110` : ''
         } transition-transform`}
       >
         {labelText} {formatTime(boundary)}
       </div>
-      {/* Triangle pointer connecting the pinhead to the stem */}
+      {/* Triangle pointer below pinhead, above stem. */}
       <div
-        className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent ${
+        className={`absolute top-[26px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent ${
           isStart ? 'border-t-emerald-500' : 'border-t-rose-500'
         }`}
       />
-      {/* Larger invisible touch target — extends beyond the visible
-          stem for easy tap-and-drag on mobile. ~44px wide. */}
+      {/* Stem — runs from below the triangle to the bottom of the box. */}
       <div
-        className="absolute -inset-x-5 -top-12 bottom-0"
+        className={`absolute top-[32px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 ${color} ${
+          dragging ? 'opacity-100' : 'opacity-90'
+        } shadow-md`}
+      />
+      {/* Wider invisible touch target around the whole pin. */}
+      <div
+        className="absolute inset-y-0 -inset-x-5"
         style={{ touchAction: 'none' }}
       />
     </div>
@@ -354,6 +356,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       resize: false,
     });
     adRegionRef.current = region;
+
+    // Stop the region from swallowing pointer events — clicks anywhere in
+    // the waveform (including inside the ad band) should pass through to
+    // wavesurfer's seek and to our cursor scrub overlay.
+    const regionEl = (region as unknown as { element?: HTMLElement }).element;
+    if (regionEl) {
+      regionEl.style.pointerEvents = 'none';
+    }
 
     ws.on('interaction', (relTime: number) => {
       if (audioRef.current) {
@@ -799,7 +809,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                 onWheel={onWheel}
                 className="overflow-x-auto"
               >
-                <div className="relative pt-8 min-w-full" ref={overlayRef}>
+                <div className="relative min-w-full" ref={overlayRef}>
+                  {/* Header strip — gives the pinheads a place to live INSIDE
+                      the overlay's box (so they aren't clipped by the
+                      enclosing overflow-x-auto scroll container). */}
+                  <div className="h-9" />
                   {/* Pins live in the same horizontal coordinate system as
                       the waveform host (overlayRef). When zoom > 1, wavesurfer
                       widens its canvas — the relative wrapper grows with it,
@@ -830,11 +844,13 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                   />
                   <div
                     ref={cursorRef}
-                    className="absolute top-0 bottom-0 -translate-x-1/2 z-20"
+                    className="absolute inset-y-0 -translate-x-1/2 z-20"
                     style={{ left: '0%', display: 'none', touchAction: 'none' }}
                     aria-hidden
                     onPointerDown={(e) => {
-                      // Drag the cursor pinhead to scrub the audio.
+                      // Drag the cursor pinhead to scrub the audio. Scrub
+                      // is bounded by the visible window, NOT the ad
+                      // boundary — user can listen anywhere in context.
                       const overlay = overlayRef.current;
                       const audio = audioRef.current;
                       if (!overlay || !audio) return;
@@ -865,16 +881,16 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       window.addEventListener('pointercancel', onUp);
                     }}
                   >
-                    {/* Vertical stem */}
-                    <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] pointer-events-none" />
-                    {/* Pinhead */}
-                    <div className="absolute -top-9 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white bg-amber-500 text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap cursor-ew-resize">
+                    {/* Pinhead at top */}
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white bg-amber-500 text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap cursor-ew-resize">
                       ▶ {formatTime(currentTime)}
                     </div>
-                    {/* Triangle pointer */}
-                    <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-amber-500 pointer-events-none" />
-                    {/* Larger touch target */}
-                    <div className="absolute -inset-x-5 -top-12 bottom-0 cursor-ew-resize" />
+                    {/* Triangle */}
+                    <div className="absolute top-[26px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-amber-500 pointer-events-none" />
+                    {/* Stem */}
+                    <div className="absolute top-[32px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] pointer-events-none" />
+                    {/* Wider hit area */}
+                    <div className="absolute inset-y-0 -inset-x-5 cursor-ew-resize" />
                   </div>
                   <div ref={containerRef} className="w-full" />
                 </div>
