@@ -42,8 +42,9 @@ export async function getAdInbox(
   limit = 50,
   offset = 0,
 ): Promise<InboxResponse> {
+  // buildQueryString already returns the leading "?" (or "" when empty).
   const qs = buildQueryString({ status, limit, offset });
-  return apiRequest<InboxResponse>(`/ad-inbox${qs ? `?${qs}` : ''}`);
+  return apiRequest<InboxResponse>(`/ad-inbox${qs}`);
 }
 
 export interface PeaksResponse {
@@ -63,6 +64,6 @@ export async function getEpisodePeaks(
 ): Promise<PeaksResponse> {
   const qs = buildQueryString({ start, end, resolution_ms: resolutionMs });
   return apiRequest<PeaksResponse>(
-    `/feeds/${slug}/episodes/${episodeId}/peaks${qs ? `?${qs}` : ''}`,
+    `/feeds/${slug}/episodes/${episodeId}/peaks${qs}`,
   );
 }
