@@ -160,27 +160,11 @@ function Pin({
 }
 
 // ----------------------------------------------------------------------
-// Playhead cursor — our own thin vertical line, driven by audio.currentTime.
-// Lives in the same coord space as Pin (overlayRef parent) so it tracks the
-// waveform under zoom and scroll just like the START/END pins do.
-function Cursor({ time, windowStart, windowDuration, isPlaying }: {
-  time: number;
-  windowStart: number;
-  windowDuration: number;
-  isPlaying: boolean;
-}) {
-  const rel = (time - windowStart) / windowDuration;
-  if (!Number.isFinite(rel) || rel < 0 || rel > 1) return null;
-  return (
-    <div
-      style={{ left: `${rel * 100}%` }}
-      className={`absolute top-0 bottom-0 w-0.5 -translate-x-1/2 z-20 pointer-events-none bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] ${
-        isPlaying ? '' : 'opacity-80'
-      }`}
-      aria-hidden
-    />
-  );
-}
+// Playhead cursor — ref-driven DOM updates from the RAF loop, NOT React
+// state, so position can update at full 60fps without re-rendering the
+// whole modal tree (which fights wavesurfer + the regions plugin).
+// Position is read from the parent component's RAF loop via the
+// imperative handle returned by Cursor.
 
 // ----------------------------------------------------------------------
 
@@ -188,6 +172,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
   const scrollContainerRef = useRef<HTMLDivElement>(null); // overflow-x-auto wrapper
+  const cursorRef = useRef<HTMLDivElement>(null);      // playhead, position-updated from RAF
   const audioRef = useRef<HTMLAudioElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
@@ -418,23 +403,63 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   }, [adStart, adEnd, windowStart, windowDuration]);
 
   // ------------------------------------------------------------------
-  // Cursor sync: <audio> drives the displayed currentTime, which in turn
-  // positions our own playhead overlay (see <Cursor /> below). Wavesurfer's
-  // internal cursor is unreliable without a media backend, so we ignore it.
+  // Cursor sync: <audio> drives the cursor position via direct DOM update
+  // (ref-based, no React re-render). React state is only updated ~10×/s
+  // for the transport time readout — full-rate state updates would
+  // re-render the whole modal at 60fps and stutter the cursor.
   useEffect(() => {
     let raf = 0;
+    let lastReportedRoundedTime = -1;
     const loop = () => {
       const audio = audioRef.current;
-      if (audio) {
-        // Read currentTime every frame; the cursor element reads via CSS
-        // ref. This is cheaper than re-rendering React on every frame.
-        setCurrentTime(audio.currentTime);
+      const cursor = cursorRef.current;
+      if (audio && cursor) {
+        const t = audio.currentTime;
+        const rel = (t - windowStart) / windowDuration;
+        if (Number.isFinite(rel) && rel >= 0 && rel <= 1) {
+          cursor.style.left = `${rel * 100}%`;
+          cursor.style.display = '';
+        } else {
+          cursor.style.display = 'none';
+        }
+        // Throttled state push for the transport readout.
+        const rounded = Math.round(t * 10) / 10;
+        if (rounded !== lastReportedRoundedTime) {
+          lastReportedRoundedTime = rounded;
+          setCurrentTime(t);
+        }
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [windowStart, windowDuration]);
+
+  // ------------------------------------------------------------------
+  // Seed audio.currentTime to a sensible spot near the ad on first
+  // metadata-loaded event AND whenever the active item changes. Without
+  // this, audio plays from t=0 (the start of the file) when the user hits
+  // Play — for a post-roll ad whose window is at e.g. 6980-7200s, the
+  // cursor would never enter the visible window. Snap to ad-start so the
+  // user lands on the ad. We seed to (adStart - 2) for a tiny pre-roll.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const seek = () => {
+      const target = Math.max(0, adStart - 2);
+      // Don't fight the user if they've already moved the playhead.
+      if (audio.currentTime < 0.1) {
+        audio.currentTime = target;
+      }
+    };
+    if (audio.readyState >= 1 /* HAVE_METADATA */) {
+      seek();
+    } else {
+      audio.addEventListener('loadedmetadata', seek, { once: true });
+      return () => audio.removeEventListener('loadedmetadata', seek);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.podcastSlug, item.episodeId, item.adIndex, resetTick]);
 
   // ------------------------------------------------------------------
   // Audio playback.
@@ -786,11 +811,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                     onDragMove={playWhileDrag ? onPinDragMove : undefined}
                     onDragEnd={onPinDragEnd}
                   />
-                  <Cursor
-                    time={currentTime}
-                    windowStart={windowStart}
-                    windowDuration={windowDuration}
-                    isPlaying={isPlaying}
+                  <div
+                    ref={cursorRef}
+                    className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 z-20 pointer-events-none bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)]"
+                    style={{ left: '0%', display: 'none' }}
+                    aria-hidden
                   />
                   <div ref={containerRef} className="w-full" />
                 </div>
