@@ -157,6 +157,29 @@ function Pin({
 }
 
 // ----------------------------------------------------------------------
+// Playhead cursor — our own thin vertical line, driven by audio.currentTime.
+// Lives in the same coord space as Pin (overlayRef parent) so it tracks the
+// waveform under zoom and scroll just like the START/END pins do.
+function Cursor({ time, windowStart, windowDuration, isPlaying }: {
+  time: number;
+  windowStart: number;
+  windowDuration: number;
+  isPlaying: boolean;
+}) {
+  const rel = (time - windowStart) / windowDuration;
+  if (!Number.isFinite(rel) || rel < 0 || rel > 1) return null;
+  return (
+    <div
+      style={{ left: `${rel * 100}%` }}
+      className={`absolute top-0 bottom-0 w-0.5 -translate-x-1/2 z-20 pointer-events-none bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] ${
+        isPlaying ? '' : 'opacity-80'
+      }`}
+      aria-hidden
+    />
+  );
+}
+
+// ----------------------------------------------------------------------
 
 function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
@@ -191,6 +214,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const [zoom, setZoom] = useState(1);
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 20;
+  // Bumped by resetView to force a clean wavesurfer rebuild (and re-fetch
+  // of peaks). Belt-and-suspenders so Reset always lands a known-good
+  // state regardless of which states actually changed.
+  const [resetTick, setResetTick] = useState(0);
   const [playWhileDrag, setPlayWhileDrag] = useState<boolean>(loadPlayWhileDragging);
   const wasPlayingBeforeDragRef = useRef(false);
   const [sponsorInput, setSponsorInput] = useState(item.sponsor ?? '');
@@ -218,7 +245,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [item.podcastSlug, item.episodeId, windowStart, windowEnd]);
+  }, [item.podcastSlug, item.episodeId, windowStart, windowEnd, resetTick]);
 
   // ------------------------------------------------------------------
   // Mount wavesurfer when peaks/window arrive. Region is decorative —
@@ -236,7 +263,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       duration: windowDuration,
       waveColor: '#64748b',
       progressColor: '#22d3ee',
-      cursorColor: '#f59e0b',
+      cursorColor: 'transparent',  // we render our own playhead — see <Cursor /> below
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
@@ -370,38 +397,23 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   }, [adStart, adEnd, windowStart, windowDuration]);
 
   // ------------------------------------------------------------------
-  // Cursor sync: <audio> drives, wavesurfer cursor + transport readout follow.
+  // Cursor sync: <audio> drives the displayed currentTime, which in turn
+  // positions our own playhead overlay (see <Cursor /> below). Wavesurfer's
+  // internal cursor is unreliable without a media backend, so we ignore it.
   useEffect(() => {
     let raf = 0;
-    let lastReportedTime = -1;
     const loop = () => {
       const audio = audioRef.current;
-      const ws = wsRef.current;
       if (audio) {
-        const t = audio.currentTime;
-        // Throttle React re-renders to ~10/s by only setting state when
-        // the displayed value would actually change (0.1s precision).
-        const rounded = Math.round(t * 10) / 10;
-        if (rounded !== lastReportedTime) {
-          lastReportedTime = rounded;
-          setCurrentTime(t);
-        }
-        if (ws) {
-          const rel = t - windowStart;
-          if (rel >= 0 && rel <= windowDuration) {
-            try {
-              (ws as unknown as { setTime: (t: number) => void }).setTime(rel);
-            } catch {
-              /* not ready */
-            }
-          }
-        }
+        // Read currentTime every frame; the cursor element reads via CSS
+        // ref. This is cheaper than re-rendering React on every frame.
+        setCurrentTime(audio.currentTime);
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [windowStart, windowDuration]);
+  }, []);
 
   // ------------------------------------------------------------------
   // Audio playback.
@@ -482,6 +494,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     setAdStart(defaults.adStart);
     setAdEnd(defaults.adEnd);
     setZoom(1);
+    setPeaks(null);                        // force a re-fetch + rebuild
+    setResetTick((n) => n + 1);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = defaults.adStart;
+      setIsPlaying(false);
+    }
   };
 
   const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, +(z * 1.5).toFixed(2)));
@@ -744,6 +764,12 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                     onDragStart={onPinDragStart}
                     onDragMove={playWhileDrag ? onPinDragMove : undefined}
                     onDragEnd={onPinDragEnd}
+                  />
+                  <Cursor
+                    time={currentTime}
+                    windowStart={windowStart}
+                    windowDuration={windowDuration}
+                    isPlaying={isPlaying}
                   />
                   <div ref={containerRef} className="w-full" />
                 </div>
