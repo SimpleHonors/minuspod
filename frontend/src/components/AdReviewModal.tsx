@@ -581,11 +581,15 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       audio.currentTime = positionBeforePinDragRef.current;
       positionBeforePinDragRef.current = null;
     }
-    if (playWhileDrag) {
+    // Restore the play/pause state from before the drag started, so
+    // adjusting a boundary never feels like it pressed Pause.
+    if (wasPlayingBeforeDragRef.current) {
+      audio.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false));
+    } else {
       audio.pause();
       setIsPlaying(false);
-    } else if (wasPlayingBeforeDragRef.current) {
-      audio.play().catch(() => {});
     }
   };
 
@@ -895,6 +899,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       (e.target as HTMLElement).setPointerCapture(e.pointerId);
                       const rect = overlay.getBoundingClientRect();
                       const wasPlaying = !audio.paused;
+                      // Quietly pause during the scrub for clean seeking;
+                      // resume on release if it was playing. Without this
+                      // some browsers stutter or end up paused after a
+                      // rapid sequence of currentTime writes.
+                      if (wasPlaying) audio.pause();
                       const compute = (clientX: number) => {
                         const xPct = (clientX - rect.left) / rect.width;
                         const clamped = Math.max(0, Math.min(1, xPct));
@@ -905,8 +914,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       };
                       const onUp = (ev: PointerEvent) => {
                         audio.currentTime = compute(ev.clientX);
-                        if (wasPlaying && audio.paused) {
-                          audio.play().catch(() => {});
+                        if (wasPlaying) {
+                          audio.play()
+                            .then(() => setIsPlaying(true))
+                            .catch(() => setIsPlaying(false));
                         }
                         window.removeEventListener('pointermove', onMove);
                         window.removeEventListener('pointerup', onUp);
