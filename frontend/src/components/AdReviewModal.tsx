@@ -210,6 +210,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const [adEnd, setAdEnd] = useState(defaults.adEnd);
 
   const [peaks, setPeaks] = useState<number[] | null>(null);
+  // Resolution actually used by the server. May be coarser than requested
+  // when the window is very long (audio_peaks auto-scales to keep the
+  // payload bounded). Drives effective-duration math below.
+  const [peakResolutionMs, setPeakResolutionMs] = useState<number>(PEAK_RESOLUTION_MS);
   const [peaksError, setPeaksError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -227,10 +231,21 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const [showSponsorPrompt, setShowSponsorPrompt] = useState(!item.sponsor);
 
   const audioUrl = `/api/v1/feeds/${item.podcastSlug}/episodes/${item.episodeId}/original.mp3`;
-  const windowDuration = useMemo(
+  // The user-requested window. May extend past the actual end of the file
+  // for post-roll ads — ffmpeg silently truncates and returns fewer peaks.
+  const requestedWindowDuration = useMemo(
     () => Math.max(0.001, windowEnd - windowStart),
     [windowStart, windowEnd],
   );
+  // The window we actually have peaks for. When peaks are loaded, derive
+  // duration from peak count × resolution so visual positioning matches
+  // the audio that exists. Pins / cursor / region all use this.
+  const windowDuration = useMemo(() => {
+    if (peaks && peaks.length > 0) {
+      return Math.max(0.001, (peaks.length * peakResolutionMs) / 1000);
+    }
+    return requestedWindowDuration;
+  }, [peaks, peakResolutionMs, requestedWindowDuration]);
 
   // ------------------------------------------------------------------
   // Fetch peaks whenever window changes.
@@ -240,7 +255,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     setPeaks(null);
     getEpisodePeaks(item.podcastSlug, item.episodeId, windowStart, windowEnd, PEAK_RESOLUTION_MS)
       .then((res) => {
-        if (!cancelled) setPeaks(res.peaks);
+        if (!cancelled) {
+          setPeaks(res.peaks);
+          setPeakResolutionMs(res.resolutionMs || PEAK_RESOLUTION_MS);
+        }
       })
       .catch((e) => {
         if (!cancelled) setPeaksError(e instanceof Error ? e.message : String(e));
