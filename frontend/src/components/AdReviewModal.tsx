@@ -248,22 +248,41 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     regionsRef.current = regions;
     wsRef.current = ws;
 
-    // wavesurfer 7 wraps its canvas in a scroll-container that grows an
-    // overflow-x: auto scrollbar when minPxPerSec * duration > parent width.
-    // We already wrap the whole thing in our own overflow-x-auto container
-    // (so the pin overlay scrolls in lockstep with the waveform), so the
-    // inner one is duplicate. Force it transparent.
+    // wavesurfer 7 mounts its scroll-container inside an *open shadow DOM*
+    // attached to containerRef. When minPxPerSec*duration > parent width
+    // it grows an overflow-x: auto scrollbar — duplicate of our own outer
+    // wrapper. Walk the shadow tree and force every element with overflow
+    // styling to be visible. Use setProperty(important) because wavesurfer
+    // sets these as inline styles which a plain assignment can't override.
     const stripInnerScroll = () => {
-      const inner = containerRef.current?.firstElementChild as HTMLElement | null;
-      if (inner) {
-        inner.style.overflow = 'visible';
-        inner.style.overflowX = 'visible';
-        inner.style.overflowY = 'visible';
+      const host = containerRef.current;
+      const root: ShadowRoot | HTMLElement | null = host?.shadowRoot ?? host;
+      if (!root) return;
+      root.querySelectorAll('*').forEach((el) => {
+        const e = el as HTMLElement;
+        // Only touch elements that actually have an overflow style applied
+        // (avoids resetting children that are content-sized).
+        if (
+          e.style.overflow || e.style.overflowX || e.style.overflowY
+        ) {
+          e.style.setProperty('overflow', 'visible', 'important');
+          e.style.setProperty('overflow-x', 'visible', 'important');
+          e.style.setProperty('overflow-y', 'visible', 'important');
+        }
+      });
+      // Also kill scroll on the host element itself just in case.
+      if (host) {
+        host.style.setProperty('overflow', 'visible', 'important');
       }
     };
     stripInnerScroll();
     ws.on('redraw', stripInnerScroll);
     ws.on('ready', stripInnerScroll);
+    // Backstop: a couple of deferred calls catch any post-init style
+    // applied after our initial pass (some wavesurfer versions style
+    // their wrapper asynchronously after the first render frame).
+    requestAnimationFrame(stripInnerScroll);
+    setTimeout(stripInnerScroll, 100);
 
     const region = regions.addRegion({
       start: Math.max(0, adStart - windowStart),
@@ -308,6 +327,20 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     } catch {
       /* ws not ready */
     }
+    // Kill the inner scrollbar wavesurfer (re)applies after zoom.
+    requestAnimationFrame(() => {
+      const host = containerRef.current;
+      const root = host?.shadowRoot ?? host;
+      if (!root) return;
+      root.querySelectorAll('*').forEach((el) => {
+        const e = el as HTMLElement;
+        if (e.style?.overflow || e.style?.overflowX || e.style?.overflowY) {
+          e.style.setProperty('overflow', 'visible', 'important');
+          e.style.setProperty('overflow-x', 'visible', 'important');
+          e.style.setProperty('overflow-y', 'visible', 'important');
+        }
+      });
+    });
   }, [zoom, peaks, windowDuration]);
 
   // Reflect ad-boundary state into the existing region without rebuilding ws.
