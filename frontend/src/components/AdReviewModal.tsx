@@ -21,7 +21,10 @@ interface Props {
 
 const CONTEXT_SECONDS = 120;
 const WINDOW_STEP_SECONDS = 60;
-const PEAK_RESOLUTION_MS = 50;
+// 100ms buckets — 4× fewer peaks than the prior 50ms default. Still plenty
+// of detail to see speech vs. silence at any reasonable zoom level, and
+// shaves the JSON payload + canvas-render cost on first mount roughly 4×.
+const PEAK_RESOLUTION_MS = 100;
 const MIN_WINDOW_PAD = 10;
 const MIN_AD_DURATION = 1.0;
 const PLAY_WHILE_DRAG_KEY = 'minuspod.adInbox.playWhileDragging';
