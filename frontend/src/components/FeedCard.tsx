@@ -14,8 +14,8 @@ function FeedCard({ feed, onRefresh, onDelete, isRefreshing }: FeedCardProps) {
   const artworkUrl = feed.artworkUrl || `/api/v1/feeds/${feed.slug}/artwork`;
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
-      <div className="flex">
+    <div className="bg-card rounded-lg border border-border">
+      <div className="flex rounded-t-lg overflow-hidden">
         <div className="w-24 h-24 shrink-0">
           <img
             src={artworkUrl}

@@ -44,7 +44,7 @@ function DropdownMenu({
         <ChevronDown className={`${chevronClassName} transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} mt-1 w-56 max-w-[calc(100vw-2rem)] bg-card border border-border rounded-lg shadow-lg z-10`}>
+        <div className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} mt-1 w-56 max-w-[calc(100vw-2rem)] bg-card border border-border rounded-lg shadow-lg z-30`}>
 
           {items.map((item, i) => {
             const isFirst = i === 0;
