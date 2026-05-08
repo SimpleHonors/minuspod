@@ -266,6 +266,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     }
     return requestedWindowDuration;
   }, [peaks, peakResolutionMs, requestedWindowDuration]);
+  // Effective end = start + actual covered duration. Used in the displayed
+  // time labels so the user sees the same window the pins / waveform are
+  // actually showing — important for post-roll ads whose requested window
+  // extends past the file end.
+  const effectiveWindowEnd = useMemo(
+    () => windowStart + windowDuration,
+    [windowStart, windowDuration],
+  );
 
   // ------------------------------------------------------------------
   // Fetch peaks whenever window changes.
@@ -277,17 +285,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       .then((res) => {
         if (cancelled) return;
         setPeaks(res.peaks);
-        const r = res.resolutionMs || PEAK_RESOLUTION_MS;
-        setPeakResolutionMs(r);
-        // If ffmpeg returned a shorter window than requested (post-roll ad
-        // whose end is at the end of the file), reconcile windowEnd to the
-        // actual coverage so pin / cursor / region positioning all align
-        // with the visible waveform. Skip the reconciliation when the
-        // shortfall is negligible, to avoid a refetch loop on rounding.
-        const effectiveEnd = windowStart + (res.peaks.length * r) / 1000;
-        if (effectiveEnd > windowStart && windowEnd - effectiveEnd > 0.5) {
-          setWindowEnd(effectiveEnd);
-        }
+        setPeakResolutionMs(res.resolutionMs || PEAK_RESOLUTION_MS);
       })
       .catch((e) => {
         if (!cancelled) setPeaksError(e instanceof Error ? e.message : String(e));
@@ -810,7 +808,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
               title="Reset waveform window + ad bounds to defaults">↻ Reset</button>
           </div>
           <div className="flex items-center gap-2">
-            <span>{formatTime(windowEnd)}</span>
+            <span>{formatTime(effectiveWindowEnd)}</span>
             <button type="button" onClick={shrinkForward}
               disabled={windowEnd <= adEnd + MIN_WINDOW_PAD + WINDOW_STEP_SECONDS}
               className={`ml-2 px-2 py-1 rounded ${ghostBtn}`}

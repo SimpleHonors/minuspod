@@ -52,9 +52,17 @@ function itemKey(it: { podcastSlug: string; episodeId: string; adIndex: number }
   return `${it.podcastSlug}:${it.episodeId}:${it.adIndex}`;
 }
 
+const PAGE_SIZE = 50;
+
 function AdInboxPage() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<InboxStatusFilter>('pending');
+  const [page, setPage] = useState(0);
+  // Reset to page 0 whenever the status filter changes.
+  const setStatusAndResetPage = (s: InboxStatusFilter) => {
+    setStatus(s);
+    setPage(0);
+  };
   // Track the active item by identity (not index). Index-based tracking
   // gets out of sync after refetch when the just-actioned item drops out
   // of the pending list — using the item itself + a `key` prop on the
@@ -67,8 +75,8 @@ function AdInboxPage() {
   const [showSkipped, setShowSkipped] = useState(false);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['ad-inbox', status],
-    queryFn: () => getAdInbox(status, 100, 0),
+    queryKey: ['ad-inbox', status, page],
+    queryFn: () => getAdInbox(status, PAGE_SIZE, page * PAGE_SIZE),
     staleTime: 5_000,
   });
 
@@ -142,7 +150,7 @@ function AdInboxPage() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setStatus(tab.id)}
+              onClick={() => setStatusAndResetPage(tab.id)}
               className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
                 isActive
                   ? 'bg-primary text-primary-foreground border-primary'
@@ -257,6 +265,38 @@ function AdInboxPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {data && data.total > PAGE_SIZE && (
+        <div className="mt-4 flex items-center justify-between gap-3 flex-wrap text-sm">
+          <div className="text-muted-foreground tabular-nums">
+            Showing {page * PAGE_SIZE + 1}–
+            {Math.min(data.total, page * PAGE_SIZE + items.length)} of{' '}
+            <span className="text-foreground font-medium">{data.total}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              ← Prev
+            </button>
+            <span className="text-muted-foreground tabular-nums">
+              Page {page + 1} of {Math.max(1, Math.ceil(data.total / PAGE_SIZE))}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={(page + 1) * PAGE_SIZE >= data.total}
+              className="px-3 py-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next →
+            </button>
+          </div>
         </div>
       )}
 
