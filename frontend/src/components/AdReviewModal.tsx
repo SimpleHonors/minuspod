@@ -409,9 +409,9 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      if (audio.currentTime < adStart - 1 || audio.currentTime > adEnd + 1) {
-        audio.currentTime = Math.max(0, adStart - 2);
-      }
+      // Don't snap the playhead — let the user listen anywhere they want.
+      // Use the SkipBack button (or J / J on the ad start pin) to return
+      // to the ad start.
       audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
       audio.pause();

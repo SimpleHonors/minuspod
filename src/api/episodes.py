@@ -251,7 +251,12 @@ def serve_original_audio(slug, episode_id):
     path = storage.get_original_path(slug, episode_id)
     if not path.exists():
         return error_response('Original audio file missing', 404)
-    return send_file(path, mimetype='audio/mpeg', conditional=True)
+    response = send_file(path, mimetype='audio/mpeg', conditional=True)
+    # Advertise byte-range support so browsers will issue Range requests
+    # to seek anywhere in the file. Without this header some clients
+    # download serially and refuse to seek past the buffered tail.
+    response.headers['Accept-Ranges'] = 'bytes'
+    return response
 
 
 @api.route('/feeds/<slug>/episodes/<episode_id>/peaks', methods=['GET'])
