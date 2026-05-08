@@ -545,10 +545,12 @@ class RSSParser:
         lines.append('<language>en</language>')
         lines.append('<itunes:author>MinusPod</itunes:author>')
 
-        # Channel artwork: ship the MinusPod logo so podcast apps display
-        # something instead of a generic placeholder. iTunes requires PNG/JPG
-        # (no SVG); the React UI bundles logo.png at /ui/logo.png.
-        artwork_href = f"{base_url}/ui/logo.png"
+        # Channel artwork: 3000×3000 PNG. Apple Podcasts requires 1400-3000 px
+        # square JPG/PNG and validates strictly; smaller images render wonky
+        # in many clients. The Dockerfile upscales the bundled 512×512
+        # icon to /ui/feed-icon.png at build time so we don't have to keep
+        # a second source asset in frontend/public/.
+        artwork_href = f"{base_url}/ui/feed-icon.png"
         lines.append('<image>')
         lines.append(f'  <url>{self._escape_xml(artwork_href)}</url>')
         lines.append(f'  <title>{self._escape_xml(channel_title)}</title>')
