@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import {
+  Play, Pause, SkipBack, SkipForward, Rewind, FastForward, Square,
+  ZoomIn, ZoomOut,
+} from 'lucide-react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
 import type { InboxItem } from '../api/adInbox';
@@ -153,7 +157,8 @@ function Pin({
 
 function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
-  const overlayRef = useRef<HTMLDivElement>(null);     // pin overlay (same width as containerRef)
+  const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
+  const scrollContainerRef = useRef<HTMLDivElement>(null); // overflow-x-auto wrapper
   const audioRef = useRef<HTMLAudioElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
@@ -178,6 +183,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [peaksError, setPeaksError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  // Zoom is a multiplier of "fit" — 1 = fit-to-container, 2 = 2× zoomed in, etc.
+  const [zoom, setZoom] = useState(1);
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 20;
   const [playWhileDrag, setPlayWhileDrag] = useState<boolean>(loadPlayWhileDragging);
   const wasPlayingBeforeDragRef = useRef(false);
   const [sponsorInput, setSponsorInput] = useState(item.sponsor ?? '');
@@ -260,6 +270,26 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [peaks, windowDuration, windowStart]);
 
+  // Push zoom changes into wavesurfer AND resize the pin overlay so the
+  // pins stay anchored to the right moments when zoomed. The pin overlay's
+  // width must match the waveform's actual rendered width — pins use
+  // `left: %` against the overlay's box.
+  useEffect(() => {
+    const ws = wsRef.current;
+    const sc = scrollContainerRef.current;
+    const overlay = overlayRef.current;
+    if (!ws || !sc || !overlay) return;
+    const fitPxPerSec = sc.clientWidth / Math.max(0.001, windowDuration);
+    const targetPxPerSec = fitPxPerSec * zoom;
+    const targetWidth = windowDuration * targetPxPerSec;
+    overlay.style.minWidth = `${targetWidth}px`;
+    try {
+      ws.zoom(targetPxPerSec);
+    } catch {
+      /* ws not ready */
+    }
+  }, [zoom, peaks, windowDuration]);
+
   // Reflect ad-boundary state into the existing region without rebuilding ws.
   useEffect(() => {
     const region = adRegionRef.current;
@@ -275,19 +305,30 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   }, [adStart, adEnd, windowStart, windowDuration]);
 
   // ------------------------------------------------------------------
-  // Cursor sync: <audio> drives, wavesurfer follows.
+  // Cursor sync: <audio> drives, wavesurfer cursor + transport readout follow.
   useEffect(() => {
     let raf = 0;
+    let lastReportedTime = -1;
     const loop = () => {
       const audio = audioRef.current;
       const ws = wsRef.current;
-      if (audio && ws) {
-        const rel = audio.currentTime - windowStart;
-        if (rel >= 0 && rel <= windowDuration) {
-          try {
-            (ws as unknown as { setTime: (t: number) => void }).setTime(rel);
-          } catch {
-            /* not ready */
+      if (audio) {
+        const t = audio.currentTime;
+        // Throttle React re-renders to ~10/s by only setting state when
+        // the displayed value would actually change (0.1s precision).
+        const rounded = Math.round(t * 10) / 10;
+        if (rounded !== lastReportedTime) {
+          lastReportedTime = rounded;
+          setCurrentTime(t);
+        }
+        if (ws) {
+          const rel = t - windowStart;
+          if (rel >= 0 && rel <= windowDuration) {
+            try {
+              (ws as unknown as { setTime: (t: number) => void }).setTime(rel);
+            } catch {
+              /* not ready */
+            }
           }
         }
       }
@@ -311,6 +352,26 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       audio.pause();
       setIsPlaying(false);
     }
+  };
+
+  const seekTo = (t: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, t);
+  };
+  const seekRelative = (delta: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = Math.max(0, audio.currentTime + delta);
+  };
+  const seekToAdStart = () => seekTo(adStart);
+  const seekToAdEnd = () => seekTo(adEnd);
+  const stopPlayback = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = adStart;
+    setIsPlaying(false);
   };
 
   // ------------------------------------------------------------------
@@ -355,6 +416,41 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
     setWindowEnd(defaults.windowEnd);
     setAdStart(defaults.adStart);
     setAdEnd(defaults.adEnd);
+    setZoom(1);
+  };
+
+  const zoomIn = () => setZoom((z) => Math.min(ZOOM_MAX, +(z * 1.5).toFixed(2)));
+  const zoomOut = () => setZoom((z) => Math.max(ZOOM_MIN, +(z / 1.5).toFixed(2)));
+
+  // Mouse-wheel zoom on the waveform: Ctrl/Shift wheel zooms,
+  // bare wheel still scrolls horizontally (browser default in overflow-x-auto).
+  // We intercept ALL wheel events on the scroll container so the user doesn't
+  // need a modifier key — feels more natural for an audio-editing surface.
+  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    // Only act on vertical wheel (deltaY); leave horizontal wheel alone so
+    // trackpad horizontal panning still scrolls the waveform.
+    if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    // Zoom around the cursor: capture the time at the cursor before, then
+    // restore the same time at the same cursor x after zoom by adjusting scroll.
+    const sc = scrollContainerRef.current;
+    if (!sc) return;
+    const rect = sc.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left + sc.scrollLeft;
+    const fitPxPerSec = rect.width / Math.max(0.001, windowDuration);
+    const oldPxPerSec = fitPxPerSec * zoom;
+    const cursorTime = cursorX / Math.max(0.001, oldPxPerSec);
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const nextZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, +(zoom * factor).toFixed(3)));
+    setZoom(nextZoom);
+    // Re-anchor the cursor: schedule scroll adjustment after layout updates.
+    requestAnimationFrame(() => {
+      const sc2 = scrollContainerRef.current;
+      if (!sc2) return;
+      const newPxPerSec = fitPxPerSec * nextZoom;
+      const newCursorX = cursorTime * newPxPerSec;
+      sc2.scrollLeft = newCursorX - (e.clientX - rect.left);
+    });
   };
 
   // ------------------------------------------------------------------
@@ -549,37 +645,71 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
             ) : !peaks ? (
               <p className="text-sm text-muted-foreground">Loading waveform…</p>
             ) : (
-              <div className="relative pt-8" ref={overlayRef}>
-                {/* Pins live in the same horizontal coordinate system as the
-                    waveform container. The pt-8 above gives them headroom
-                    for their START/END labels. */}
-                <Pin
-                  kind="start"
-                  boundary={adStart}
-                  windowStart={windowStart}
-                  windowDuration={windowDuration}
-                  containerRef={containerRef}
-                  otherBoundary={adEnd}
-                  onChange={setAdStart}
-                  onDragStart={onPinDragStart}
-                  onDragMove={playWhileDrag ? onPinDragMove : undefined}
-                  onDragEnd={onPinDragEnd}
-                />
-                <Pin
-                  kind="end"
-                  boundary={adEnd}
-                  windowStart={windowStart}
-                  windowDuration={windowDuration}
-                  containerRef={containerRef}
-                  otherBoundary={adStart}
-                  onChange={setAdEnd}
-                  onDragStart={onPinDragStart}
-                  onDragMove={playWhileDrag ? onPinDragMove : undefined}
-                  onDragEnd={onPinDragEnd}
-                />
-                <div ref={containerRef} className="w-full" />
+              <div
+                ref={scrollContainerRef}
+                onWheel={onWheel}
+                className="overflow-x-auto"
+              >
+                <div className="relative pt-8 min-w-full" ref={overlayRef}>
+                  {/* Pins live in the same horizontal coordinate system as
+                      the waveform host (overlayRef). When zoom > 1, wavesurfer
+                      widens its canvas — the relative wrapper grows with it,
+                      so pin `left: %` keeps tracking the right time. */}
+                  <Pin
+                    kind="start"
+                    boundary={adStart}
+                    windowStart={windowStart}
+                    windowDuration={windowDuration}
+                    containerRef={overlayRef}
+                    otherBoundary={adEnd}
+                    onChange={setAdStart}
+                    onDragStart={onPinDragStart}
+                    onDragMove={playWhileDrag ? onPinDragMove : undefined}
+                    onDragEnd={onPinDragEnd}
+                  />
+                  <Pin
+                    kind="end"
+                    boundary={adEnd}
+                    windowStart={windowStart}
+                    windowDuration={windowDuration}
+                    containerRef={overlayRef}
+                    otherBoundary={adStart}
+                    onChange={setAdEnd}
+                    onDragStart={onPinDragStart}
+                    onDragMove={playWhileDrag ? onPinDragMove : undefined}
+                    onDragEnd={onPinDragEnd}
+                  />
+                  <div ref={containerRef} className="w-full" />
+                </div>
               </div>
             )}
+          </div>
+
+          {/* Zoom slider */}
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <button type="button" onClick={zoomOut}
+              disabled={zoom <= ZOOM_MIN + 0.01}
+              className={`p-1.5 rounded ${ghostBtn}`}
+              title="Zoom out (mouse wheel down)">
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <input
+              type="range"
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={0.1}
+              value={zoom}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="flex-1 accent-primary"
+              title="Zoom"
+            />
+            <button type="button" onClick={zoomIn}
+              disabled={zoom >= ZOOM_MAX - 0.01}
+              className={`p-1.5 rounded ${ghostBtn}`}
+              title="Zoom in (mouse wheel up)">
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <span className="tabular-nums w-10 text-right">{zoom.toFixed(1)}×</span>
           </div>
 
           {/* Boundaries readout */}
@@ -607,17 +737,56 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
             onEnded={() => setIsPlaying(false)}
           />
 
-          <div className="mt-3 flex items-center gap-2 flex-wrap">
-            <button type="button" onClick={togglePlay}
-              className={`px-3 py-1.5 rounded-lg ${primaryBtn} text-sm`}
-              title="Play / pause (Space)">
-              {isPlaying ? 'Pause' : 'Play'}
-            </button>
-            <span className="text-xs text-muted-foreground">
-              Drag the <span className="text-emerald-500 font-semibold">START</span> /{' '}
-              <span className="text-rose-500 font-semibold">END</span> pins above the waveform.{' '}
-              <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • <kbd>C</kbd> confirm • <kbd>R</kbd> reject
-            </span>
+          {/* Transport bar */}
+          <div className="mt-3 flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-secondary/50 border border-border flex-wrap">
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={seekToAdStart}
+                className={`p-2 rounded ${ghostBtn}`}
+                title="Jump to START pin">
+                <SkipBack className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={() => seekRelative(-10)}
+                className={`p-2 rounded ${ghostBtn}`}
+                title="Back 10s">
+                <Rewind className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={togglePlay}
+                className={`p-2 rounded-full ${primaryBtn}`}
+                title="Play / pause (Space)">
+                {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+              </button>
+              <button type="button" onClick={() => seekRelative(10)}
+                className={`p-2 rounded ${ghostBtn}`}
+                title="Forward 10s">
+                <FastForward className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={seekToAdEnd}
+                className={`p-2 rounded ${ghostBtn}`}
+                title="Jump to END pin">
+                <SkipForward className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={stopPlayback}
+                className={`p-2 rounded ${ghostBtn}`}
+                title="Stop (pause + return to START)">
+                <Square className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
+              <span className="text-foreground">{formatTime(currentTime)}</span>
+              <span>/</span>
+              <span>{formatTime(adEnd - adStart)} selection</span>
+              {currentTime >= adStart && currentTime <= adEnd && (
+                <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 text-[10px] font-semibold uppercase tracking-wider">
+                  inside ad
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-2 text-xs text-muted-foreground">
+            Drag the <span className="text-emerald-500 font-semibold">START</span> /{' '}
+            <span className="text-rose-500 font-semibold">END</span> pins above the waveform.{' '}
+            <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • <kbd>C</kbd> confirm • <kbd>R</kbd> reject
           </div>
         </div>
 

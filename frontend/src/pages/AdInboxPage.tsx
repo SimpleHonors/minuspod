@@ -51,7 +51,11 @@ function statusPillClass(status: InboxItem['status']): string {
 function AdInboxPage() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<InboxStatusFilter>('pending');
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  // Track the active item by identity (not index). Index-based tracking
+  // gets out of sync after refetch when the just-actioned item drops out
+  // of the pending list — using the item itself + a `key` prop on the
+  // modal guarantees a clean remount per item with fresh state.
+  const [activeItem, setActiveItem] = useState<InboxItem | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ad-inbox', status],
@@ -62,22 +66,25 @@ function AdInboxPage() {
   const items = data?.items ?? [];
   const counts = data?.counts;
 
-  const closeModal = () => setActiveIdx(null);
-  const goNext = () => {
-    if (activeIdx === null) return;
-    if (activeIdx + 1 < items.length) {
-      setActiveIdx(activeIdx + 1);
-    } else {
-      // queue exhausted — close + refresh so newly-pending items can show up
-      setActiveIdx(null);
+  const closeModal = () => setActiveItem(null);
+
+  const handleSaveAndNext = () => {
+    if (!activeItem) {
       queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
+      return;
     }
-  };
-  const onActionComplete = () => {
+    // Pick the next item from the *current* list (the actioned item is
+    // still in here until the refetch completes), then trigger refetch.
+    const idx = items.findIndex(
+      (i) =>
+        i.podcastSlug === activeItem.podcastSlug &&
+        i.episodeId === activeItem.episodeId &&
+        i.adIndex === activeItem.adIndex,
+    );
+    const next = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
+    setActiveItem(next);
     queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
   };
-
-  const activeItem = activeIdx !== null ? items[activeIdx] : null;
 
   return (
     <div>
@@ -148,10 +155,10 @@ function AdInboxPage() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it, idx) => (
+              {items.map((it) => (
                 <tr
                   key={`${it.podcastSlug}:${it.episodeId}:${it.adIndex}`}
-                  onClick={() => setActiveIdx(idx)}
+                  onClick={() => setActiveItem(it)}
                   className="border-t border-border cursor-pointer hover:bg-accent transition-colors"
                 >
                   <td className="px-4 py-2">
@@ -187,12 +194,10 @@ function AdInboxPage() {
 
       {activeItem && (
         <AdReviewModal
+          key={`${activeItem.podcastSlug}:${activeItem.episodeId}:${activeItem.adIndex}`}
           item={activeItem}
           onClose={closeModal}
-          onSaveAndNext={() => {
-            onActionComplete();
-            goNext();
-          }}
+          onSaveAndNext={handleSaveAndNext}
         />
       )}
     </div>
