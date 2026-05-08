@@ -140,48 +140,49 @@ function Pin({
 
   if (!visible) return null;
 
-  // All offsets are positive within the pin's box so the pinhead lives
-  // INSIDE the parent overlay's bounds. (Negative offsets get clipped by
-  // the parent scroll container, since `overflow-x: auto` forces
-  // `overflow-y` to also clip per CSS spec.)
+  // Compact pin: small colored circle pinhead, thin stem. The label
+  // (with time) only shows when the pin is being dragged or hovered —
+  // when idle, just the circle is visible. Negative top offsets are
+  // avoided so the pinhead doesn't get clipped by the parent's
+  // overflow-x scrollbox.
 
   return (
     <div
       onPointerDown={onPointerDown}
       style={{
         left: `${leftPct}%`,
-        touchAction: 'none', // mobile: don't scroll the page while dragging
+        touchAction: 'none',
       }}
-      className={`absolute inset-y-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
+      className={`group absolute inset-y-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
         dragging ? 'cursor-grabbing' : ''
       }`}
       role="slider"
-      aria-label={`${labelText} pin`}
+      aria-label={`${labelText} pin · ${formatTime(boundary)}`}
       aria-valuenow={Math.round(boundary * 10) / 10}
     >
-      {/* Pinhead — pill at the top of the pin's box (top: 0). */}
+      {/* Compact circle pinhead at top. */}
       <div
-        className={`absolute top-0 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white ${color} text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap ${
-          dragging ? `ring-4 ${ringColor} scale-110` : ''
+        className={`absolute top-1 left-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white ${color} shadow-md ${
+          dragging ? `ring-4 ${ringColor} scale-125` : ''
         } transition-transform`}
+      />
+      {/* Time label — only visible while dragging or on hover. */}
+      <div
+        className={`absolute -top-5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded ${color} text-white text-[10px] font-bold tracking-wider whitespace-nowrap shadow-md transition-opacity duration-100 pointer-events-none ${
+          dragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}
       >
         {labelText} {formatTime(boundary)}
       </div>
-      {/* Triangle pointer below pinhead, above stem. */}
+      {/* Stem — runs from just below the circle to the bottom. */}
       <div
-        className={`absolute top-[26px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent ${
-          isStart ? 'border-t-emerald-500' : 'border-t-rose-500'
+        className={`absolute top-[20px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 ${color} ${
+          dragging ? 'opacity-100' : 'opacity-80'
         }`}
       />
-      {/* Stem — runs from below the triangle to the bottom of the box. */}
+      {/* Touch target — wraps the whole pin column for easy mobile grab. */}
       <div
-        className={`absolute top-[32px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 ${color} ${
-          dragging ? 'opacity-100' : 'opacity-90'
-        } shadow-md`}
-      />
-      {/* Wider invisible touch target around the whole pin. */}
-      <div
-        className="absolute inset-y-0 -inset-x-5"
+        className="absolute inset-y-0 -inset-x-4"
         style={{ touchAction: 'none' }}
       />
     </div>
@@ -247,6 +248,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const [resetTick, setResetTick] = useState(0);
   const [playWhileDrag, setPlayWhileDrag] = useState<boolean>(loadPlayWhileDragging);
   const wasPlayingBeforeDragRef = useRef(false);
+  // Save the playhead position before a pin drag (with playWhileDrag) so
+  // we can put it back where the user was listening, instead of stranding
+  // it at the new pin position.
+  const positionBeforePinDragRef = useRef<number | null>(null);
   const [sponsorInput, setSponsorInput] = useState(item.sponsor ?? '');
   const [showSponsorPrompt, setShowSponsorPrompt] = useState(!item.sponsor);
 
@@ -554,6 +559,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     const audio = audioRef.current;
     if (!audio) return;
     wasPlayingBeforeDragRef.current = !audio.paused;
+    positionBeforePinDragRef.current = audio.currentTime;
     if (playWhileDrag) {
       audio.play().catch(() => {});
     } else if (!audio.paused) {
@@ -568,6 +574,13 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const onPinDragEnd = () => {
     const audio = audioRef.current;
     if (!audio) return;
+    // Put the playhead back where the user was before they grabbed a
+    // pin. Adjusting an ad boundary shouldn't permanently move the
+    // listening position.
+    if (positionBeforePinDragRef.current !== null) {
+      audio.currentTime = positionBeforePinDragRef.current;
+      positionBeforePinDragRef.current = null;
+    }
     if (playWhileDrag) {
       audio.pause();
       setIsPlaying(false);
@@ -867,7 +880,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                   />
                   <div
                     ref={cursorRef}
-                    className="absolute inset-y-0 -translate-x-1/2 z-20"
+                    className="group/cursor absolute inset-y-0 -translate-x-1/2 z-20"
                     style={{ left: '0%', display: 'none', touchAction: 'none' }}
                     aria-hidden
                     onPointerDown={(e) => {
@@ -904,16 +917,16 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       window.addEventListener('pointercancel', onUp);
                     }}
                   >
-                    {/* Pinhead at top */}
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white bg-amber-500 text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap cursor-ew-resize">
+                    {/* Compact circle pinhead at top. */}
+                    <div className="absolute top-1 left-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white bg-amber-500 shadow-md cursor-ew-resize" />
+                    {/* Time label — hover or while moving. */}
+                    <div className="absolute -top-5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[10px] font-bold whitespace-nowrap shadow-md transition-opacity duration-100 pointer-events-none opacity-0 group-hover/cursor:opacity-100">
                       ▶ {formatTime(currentTime)}
                     </div>
-                    {/* Triangle */}
-                    <div className="absolute top-[26px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-amber-500 pointer-events-none" />
                     {/* Stem */}
-                    <div className="absolute top-[32px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] pointer-events-none" />
+                    <div className="absolute top-[20px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] pointer-events-none" />
                     {/* Wider hit area */}
-                    <div className="absolute inset-y-0 -inset-x-5 cursor-ew-resize" />
+                    <div className="absolute inset-y-0 -inset-x-4 cursor-ew-resize" />
                   </div>
                   <div ref={containerRef} className="w-full" />
                 </div>
