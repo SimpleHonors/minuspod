@@ -133,7 +133,13 @@ function Pin({
   return (
     <div
       onPointerDown={onPointerDown}
-      style={{ left: `${leftPct}%` }}
+      style={{
+        left: `${leftPct}%`,
+        // Disable browser touch gestures (page scroll, pinch-zoom) while
+        // the user is dragging the pin. Without this mobile pulls the
+        // page instead of moving the pin.
+        touchAction: 'none',
+      }}
       className={`absolute top-0 bottom-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
         dragging ? 'cursor-grabbing' : ''
       }`}
@@ -141,20 +147,31 @@ function Pin({
       aria-label={`${labelText} pin`}
       aria-valuenow={Math.round(boundary * 10) / 10}
     >
-      {/* Vertical line */}
+      {/* Vertical line / stem */}
       <div
         className={`w-0.5 h-full ${color} ${dragging ? 'opacity-100' : 'opacity-90'} mx-auto shadow-md`}
       />
-      {/* Top label */}
+      {/* Pinhead — pill at the top with the label + time. Sized for
+          mobile (>=44px tall hit zone via the wrapping anchor below). */}
       <div
-        className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded ${color} text-white text-[10px] font-bold tracking-wider shadow-md whitespace-nowrap ${
-          dragging ? `ring-4 ${ringColor}` : ''
-        }`}
+        className={`absolute -top-9 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white ${color} text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap ${
+          dragging ? `ring-4 ${ringColor} scale-110` : ''
+        } transition-transform`}
       >
         {labelText} {formatTime(boundary)}
       </div>
-      {/* Wider hit area */}
-      <div className="absolute inset-y-0 -inset-x-2" />
+      {/* Triangle pointer connecting the pinhead to the stem */}
+      <div
+        className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent ${
+          isStart ? 'border-t-emerald-500' : 'border-t-rose-500'
+        }`}
+      />
+      {/* Larger invisible touch target — extends beyond the visible
+          stem for easy tap-and-drag on mobile. ~44px wide. */}
+      <div
+        className="absolute -inset-x-5 -top-12 bottom-0"
+        style={{ touchAction: 'none' }}
+      />
     </div>
   );
 }
@@ -813,10 +830,52 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                   />
                   <div
                     ref={cursorRef}
-                    className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 z-20 pointer-events-none bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)]"
-                    style={{ left: '0%', display: 'none' }}
+                    className="absolute top-0 bottom-0 -translate-x-1/2 z-20"
+                    style={{ left: '0%', display: 'none', touchAction: 'none' }}
                     aria-hidden
-                  />
+                    onPointerDown={(e) => {
+                      // Drag the cursor pinhead to scrub the audio.
+                      const overlay = overlayRef.current;
+                      const audio = audioRef.current;
+                      if (!overlay || !audio) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                      const rect = overlay.getBoundingClientRect();
+                      const wasPlaying = !audio.paused;
+                      const compute = (clientX: number) => {
+                        const xPct = (clientX - rect.left) / rect.width;
+                        const clamped = Math.max(0, Math.min(1, xPct));
+                        return windowStart + clamped * windowDuration;
+                      };
+                      const onMove = (ev: PointerEvent) => {
+                        audio.currentTime = compute(ev.clientX);
+                      };
+                      const onUp = (ev: PointerEvent) => {
+                        audio.currentTime = compute(ev.clientX);
+                        if (wasPlaying && audio.paused) {
+                          audio.play().catch(() => {});
+                        }
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                        window.removeEventListener('pointercancel', onUp);
+                      };
+                      window.addEventListener('pointermove', onMove);
+                      window.addEventListener('pointerup', onUp);
+                      window.addEventListener('pointercancel', onUp);
+                    }}
+                  >
+                    {/* Vertical stem */}
+                    <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-0.5 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.8)] pointer-events-none" />
+                    {/* Pinhead */}
+                    <div className="absolute -top-9 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full border-2 border-white bg-amber-500 text-white text-[11px] font-bold tracking-wider shadow-lg whitespace-nowrap cursor-ew-resize">
+                      ▶ {formatTime(currentTime)}
+                    </div>
+                    {/* Triangle pointer */}
+                    <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-amber-500 pointer-events-none" />
+                    {/* Larger touch target */}
+                    <div className="absolute -inset-x-5 -top-12 bottom-0 cursor-ew-resize" />
+                  </div>
                   <div ref={containerRef} className="w-full" />
                 </div>
               </div>
