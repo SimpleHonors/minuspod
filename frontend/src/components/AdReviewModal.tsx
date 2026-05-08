@@ -20,6 +20,12 @@ interface Props {
 }
 
 const CONTEXT_SECONDS = 60;
+// Cap the default visible window. Some heuristic detections (notably
+// post-roll) flag dozens of minutes as a single "ad", which would make
+// the default fit-zoom view useless (whole episode squeezed into one
+// screen). Six minutes is enough to set ad start with context; user can
+// always expand via the +1m buttons or wheel-zoom in.
+const DEFAULT_MAX_WINDOW_SECONDS = 360;
 const WINDOW_STEP_SECONDS = 60;
 // 100ms buckets — 4× fewer peaks than the prior 50ms default. Still plenty
 // of detail to see speech vs. silence at any reasonable zoom level, and
@@ -198,15 +204,21 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const adRegionRef = useRef<ReturnType<RegionsPlugin['addRegion']> | null>(null);
 
   // Defaults derived from the original detection — used by Reset.
-  const defaults = useMemo(
-    () => ({
-      windowStart: Math.max(0, item.start - CONTEXT_SECONDS),
-      windowEnd: item.end + CONTEXT_SECONDS,
+  const defaults = useMemo(() => {
+    const windowStart = Math.max(0, item.start - CONTEXT_SECONDS);
+    const naturalEnd = item.end + CONTEXT_SECONDS;
+    const cappedEnd = windowStart + DEFAULT_MAX_WINDOW_SECONDS;
+    return {
+      windowStart,
+      // Cap the visible default to DEFAULT_MAX_WINDOW_SECONDS so a heuristic
+      // post-roll that spans the rest of the episode doesn't render the
+      // whole thing at fit-zoom. User can still see further via +1m or by
+      // zooming.
+      windowEnd: Math.min(naturalEnd, cappedEnd),
       adStart: (item.correctedBounds ?? item).start,
       adEnd: (item.correctedBounds ?? item).end,
-    }),
-    [item.start, item.end, item.correctedBounds],
-  );
+    };
+  }, [item.start, item.end, item.correctedBounds]);
 
   const [windowStart, setWindowStart] = useState(defaults.windowStart);
   const [windowEnd, setWindowEnd] = useState(defaults.windowEnd);
