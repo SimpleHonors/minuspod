@@ -898,12 +898,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       e.stopPropagation();
                       (e.target as HTMLElement).setPointerCapture(e.pointerId);
                       const rect = overlay.getBoundingClientRect();
-                      const wasPlaying = !audio.paused;
-                      // Quietly pause during the scrub for clean seeking;
-                      // resume on release if it was playing. Without this
-                      // some browsers stutter or end up paused after a
-                      // rapid sequence of currentTime writes.
-                      if (wasPlaying) audio.pause();
+                      // AUDIO PLAYS DURING SCRUB. Start playback if it was
+                      // paused so the user always hears what they're
+                      // pointing at; just keep seeking on each pointermove.
+                      if (audio.paused) {
+                        audio.play()
+                          .then(() => setIsPlaying(true))
+                          .catch(() => {});
+                      }
                       const compute = (clientX: number) => {
                         const xPct = (clientX - rect.left) / rect.width;
                         const clamped = Math.max(0, Math.min(1, xPct));
@@ -914,11 +916,6 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                       };
                       const onUp = (ev: PointerEvent) => {
                         audio.currentTime = compute(ev.clientX);
-                        if (wasPlaying) {
-                          audio.play()
-                            .then(() => setIsPlaying(true))
-                            .catch(() => setIsPlaying(false));
-                        }
                         window.removeEventListener('pointermove', onMove);
                         window.removeEventListener('pointerup', onUp);
                         window.removeEventListener('pointercancel', onUp);
