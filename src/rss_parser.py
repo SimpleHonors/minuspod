@@ -545,6 +545,17 @@ class RSSParser:
         lines.append('<language>en</language>')
         lines.append('<itunes:author>MinusPod</itunes:author>')
 
+        # Channel artwork: ship the MinusPod logo so podcast apps display
+        # something instead of a generic placeholder. iTunes requires PNG/JPG
+        # (no SVG); the React UI bundles logo.png at /ui/logo.png.
+        artwork_href = f"{base_url}/ui/logo.png"
+        lines.append('<image>')
+        lines.append(f'  <url>{self._escape_xml(artwork_href)}</url>')
+        lines.append(f'  <title>{self._escape_xml(channel_title)}</title>')
+        lines.append(f'  <link>{self._escape_xml(link)}</link>')
+        lines.append('</image>')
+        lines.append(f'<itunes:image href="{self._escape_xml(artwork_href)}" />')
+
         for ep in episodes:
             slug = ep.get('podcast_slug')
             episode_id = ep.get('episode_id')

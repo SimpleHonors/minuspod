@@ -175,6 +175,19 @@ class TestBuildCombinedFeed:
         assert root.find('./channel/title').text == 'MinusPod — All Podcasts'
         assert root.findall('./channel/item') == []
 
+    def test_channel_artwork_points_at_minuspod_logo(self):
+        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        xml = parser.build_combined_feed([self._episode()])
+
+        root = ET.fromstring(xml)
+        image_url = root.find('./channel/image/url').text
+        assert image_url == 'http://10.0.0.190:8080/ui/logo.png'
+        # itunes:image with the same href (Apple Podcasts requires it)
+        ns = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
+        itunes_image = root.find('./channel/itunes:image', ns)
+        assert itunes_image is not None
+        assert itunes_image.attrib['href'] == 'http://10.0.0.190:8080/ui/logo.png'
+
     def test_skips_rows_missing_required_keys(self):
         parser = RSSParser(base_url='http://10.0.0.190:8080')
         # Missing podcast_slug — must be silently dropped, not raise.

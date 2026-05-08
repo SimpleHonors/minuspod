@@ -6,8 +6,6 @@ interface GlobalDefaultsSectionProps {
   onAutoProcessEnabledChange: (enabled: boolean) => void;
   maxFeedEpisodes: number;
   onMaxFeedEpisodesChange: (n: number) => void;
-  combinedFeedEpisodeLimit: number;
-  onCombinedFeedEpisodeLimitChange: (n: number) => void;
   onlyExposeProcessedDefault: boolean;
   onOnlyExposeProcessedDefaultChange: (enabled: boolean) => void;
 }
@@ -17,21 +15,9 @@ function GlobalDefaultsSection({
   onAutoProcessEnabledChange,
   maxFeedEpisodes,
   onMaxFeedEpisodesChange,
-  combinedFeedEpisodeLimit,
-  onCombinedFeedEpisodeLimitChange,
   onlyExposeProcessedDefault,
   onOnlyExposeProcessedDefaultChange,
 }: GlobalDefaultsSectionProps) {
-  const combinedFeedUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/all` : '/all';
-
-  const handleCopyCombinedUrl = () => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(combinedFeedUrl).catch(() => {
-        /* clipboard may be unavailable on insecure origins; ignore */
-      });
-    }
-  };
   return (
     <CollapsibleSection
       title="Global Defaults"
@@ -79,52 +65,6 @@ function GlobalDefaultsSection({
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
             Caps how many recent episodes appear in each podcast's served RSS feed. Per-feed Max Episodes can override this.
-          </p>
-        </div>
-
-        {/* Combined feed (/all) episode limit + subscribe URL */}
-        <div className="pt-4 border-t border-border">
-          <label
-            htmlFor="combinedFeedEpisodeLimit"
-            className="block text-sm font-medium text-foreground mb-2"
-          >
-            Combined feed (/all) episode limit
-          </label>
-          <div className="flex items-center gap-3">
-            <input
-              type="number"
-              id="combinedFeedEpisodeLimit"
-              value={combinedFeedEpisodeLimit}
-              onChange={(e) =>
-                onCombinedFeedEpisodeLimitChange(parseInt(e.target.value, 10) || 0)
-              }
-              min={1}
-              max={500}
-              className="w-24 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
-            />
-            <span className="text-sm text-muted-foreground">episodes (1-500)</span>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Number of most-recent processed episodes to include in the unified <code>/all</code> feed (newest first, across every podcast). The combined feed only ever exposes processed episodes.
-          </p>
-          <div className="mt-3 flex items-center gap-2">
-            <input
-              type="text"
-              readOnly
-              value={combinedFeedUrl}
-              className="flex-1 px-3 py-1.5 rounded-lg border border-input bg-muted text-muted-foreground text-sm font-mono focus:outline-hidden"
-              onFocus={(e) => e.currentTarget.select()}
-            />
-            <button
-              type="button"
-              onClick={handleCopyCombinedUrl}
-              className="px-3 py-1.5 rounded-lg border border-input bg-background text-foreground text-sm hover:bg-muted focus:outline-hidden focus:ring-2 focus:ring-ring"
-            >
-              Copy Feed URL
-            </button>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Subscribe to this single URL in your podcast app to get every cleaned episode from every show in MinusPod.
           </p>
         </div>
 

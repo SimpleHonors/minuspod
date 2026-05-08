@@ -54,7 +54,6 @@ function Settings() {
   const [whisperModel, setWhisperModel] = useState('');
   const [autoProcessEnabled, setAutoProcessEnabled] = useState(true);
   const [maxFeedEpisodes, setMaxFeedEpisodes] = useState(300);
-  const [combinedFeedEpisodeLimit, setCombinedFeedEpisodeLimit] = useState(50);
   const [onlyExposeProcessedDefault, setOnlyExposeProcessedDefault] = useState(false);
   const [audioBitrate, setAudioBitrate] = useState('128k');
   const [vttTranscriptsEnabled, setVttTranscriptsEnabled] = useState(true);
@@ -162,7 +161,16 @@ function Settings() {
   // Sync form fields with server data via during-render compare. This is the
   // React 19 alternative to a useEffect+setState that fires whenever the
   // upstream query data identity changes.
-  const [retentionSnapshot, setRetentionSnapshot] = useState(retention);
+  //
+  // CRITICAL: initial snapshot MUST be undefined, NOT the current query value.
+  // On remount with a warm React Query cache, useQuery returns cached data on
+  // the first render. If we initialized the snapshot to that same value, the
+  // `!==` check is false on the very render where hydration must run, leaving
+  // form state stuck at the useState defaults declared above. Save then sees
+  // "diffs" against the loaded data on every default-shaped field and ships a
+  // wipe payload. Always start the snapshot at undefined so first-render
+  // hydration is guaranteed when query data is present.
+  const [retentionSnapshot, setRetentionSnapshot] = useState<typeof retention | undefined>(undefined);
   if (retention !== retentionSnapshot) {
     setRetentionSnapshot(retention);
     if (retention) {
@@ -171,7 +179,7 @@ function Settings() {
     }
   }
 
-  const [processingTimeoutsSnapshot, setProcessingTimeoutsSnapshot] = useState(processingTimeouts);
+  const [processingTimeoutsSnapshot, setProcessingTimeoutsSnapshot] = useState<typeof processingTimeouts | undefined>(undefined);
   if (processingTimeouts !== processingTimeoutsSnapshot) {
     setProcessingTimeoutsSnapshot(processingTimeouts);
     if (processingTimeouts) {
@@ -180,7 +188,7 @@ function Settings() {
     }
   }
 
-  const [audioSettingsSnapshot, setAudioSettingsSnapshot] = useState(audioSettings);
+  const [audioSettingsSnapshot, setAudioSettingsSnapshot] = useState<typeof audioSettings | undefined>(undefined);
   if (audioSettings !== audioSettingsSnapshot) {
     setAudioSettingsSnapshot(audioSettings);
     if (audioSettings) {
@@ -220,7 +228,7 @@ function Settings() {
     onError: (err: Error) => setTimeoutsError(err.message || 'Failed to save'),
   });
 
-  const [settingsSnapshot, setSettingsSnapshot] = useState(settings);
+  const [settingsSnapshot, setSettingsSnapshot] = useState<typeof settings | undefined>(undefined);
   if (settings !== settingsSnapshot) {
     setSettingsSnapshot(settings);
     if (settings) {
@@ -231,7 +239,6 @@ function Settings() {
       setWhisperModel(settings.whisperModel?.value || 'small');
       setAutoProcessEnabled(settings.autoProcessEnabled?.value ?? true);
       setMaxFeedEpisodes(settings.maxFeedEpisodes?.value ?? 300);
-      setCombinedFeedEpisodeLimit(settings.combinedFeedEpisodeLimit?.value ?? 50);
       setOnlyExposeProcessedDefault(settings.onlyExposeProcessedDefault?.value ?? false);
       setAudioBitrate(settings.audioBitrate?.value || '128k');
       setVttTranscriptsEnabled(settings.vttTranscriptsEnabled?.value ?? true);
@@ -265,7 +272,6 @@ function Settings() {
       whisperModel !== (settings.whisperModel?.value || 'small') ||
       autoProcessEnabled !== (settings.autoProcessEnabled?.value ?? true) ||
       maxFeedEpisodes !== (settings.maxFeedEpisodes?.value ?? 300) ||
-      combinedFeedEpisodeLimit !== (settings.combinedFeedEpisodeLimit?.value ?? 50) ||
       onlyExposeProcessedDefault !== (settings.onlyExposeProcessedDefault?.value ?? false) ||
       audioBitrate !== (settings.audioBitrate?.value || '128k') ||
       vttTranscriptsEnabled !== (settings.vttTranscriptsEnabled?.value ?? true) ||
@@ -286,7 +292,7 @@ function Settings() {
       audioNormalizeIntensity !== (settings.audioNormalizeIntensity?.value || 'aggressive') ||
       (podcastIndexApiKey !== '' && podcastIndexApiSecret !== '')
     );
-  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, combinedFeedEpisodeLimit, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, audioNormalizeEnabled, audioNormalizeIntensity, podcastIndexApiKey, podcastIndexApiSecret, settings]);
+  }, [systemPrompt, verificationPrompt, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, audioNormalizeEnabled, audioNormalizeIntensity, podcastIndexApiKey, podcastIndexApiSecret, settings]);
 
   const updateMutation = useMutation({
     mutationFn: () => {
@@ -366,9 +372,6 @@ function Settings() {
       // Numerics — use ?? because 0 is a meaningful value
       if (maxFeedEpisodes !== (settings.maxFeedEpisodes?.value ?? 300)) {
         payload.maxFeedEpisodes = maxFeedEpisodes;
-      }
-      if (combinedFeedEpisodeLimit !== (settings.combinedFeedEpisodeLimit?.value ?? 50)) {
-        payload.combinedFeedEpisodeLimit = combinedFeedEpisodeLimit;
       }
       if (minCutConfidence !== (settings.minCutConfidence?.value ?? 0.80)) {
         payload.minCutConfidence = minCutConfidence;
@@ -490,8 +493,6 @@ function Settings() {
         onAutoProcessEnabledChange={setAutoProcessEnabled}
         maxFeedEpisodes={maxFeedEpisodes}
         onMaxFeedEpisodesChange={setMaxFeedEpisodes}
-        combinedFeedEpisodeLimit={combinedFeedEpisodeLimit}
-        onCombinedFeedEpisodeLimitChange={setCombinedFeedEpisodeLimit}
         onlyExposeProcessedDefault={onlyExposeProcessedDefault}
         onOnlyExposeProcessedDefaultChange={setOnlyExposeProcessedDefault}
       />
