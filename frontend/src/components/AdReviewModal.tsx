@@ -85,7 +85,11 @@ function Pin({
   const [dragging, setDragging] = useState(false);
 
   const relX = (boundary - windowStart) / windowDuration;
-  const visible = relX >= 0 && relX <= 1;
+  // Tolerate a tiny bit outside [0, 1] — happens routinely on post-roll ads
+  // where the LLM places adEnd a hair past where the audio file actually
+  // ends, which makes relX = 1.0001 or so. Without slop the END pin
+  // disappears entirely.
+  const visible = relX >= -0.02 && relX <= 1.02;
   const leftPct = Math.max(0, Math.min(1, relX)) * 100;
 
   const isStart = kind === 'start';
@@ -271,9 +275,18 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     setPeaks(null);
     getEpisodePeaks(item.podcastSlug, item.episodeId, windowStart, windowEnd, PEAK_RESOLUTION_MS)
       .then((res) => {
-        if (!cancelled) {
-          setPeaks(res.peaks);
-          setPeakResolutionMs(res.resolutionMs || PEAK_RESOLUTION_MS);
+        if (cancelled) return;
+        setPeaks(res.peaks);
+        const r = res.resolutionMs || PEAK_RESOLUTION_MS;
+        setPeakResolutionMs(r);
+        // If ffmpeg returned a shorter window than requested (post-roll ad
+        // whose end is at the end of the file), reconcile windowEnd to the
+        // actual coverage so pin / cursor / region positioning all align
+        // with the visible waveform. Skip the reconciliation when the
+        // shortfall is negligible, to avoid a refetch loop on rounding.
+        const effectiveEnd = windowStart + (res.peaks.length * r) / 1000;
+        if (effectiveEnd > windowStart && windowEnd - effectiveEnd > 0.5) {
+          setWindowEnd(effectiveEnd);
         }
       })
       .catch((e) => {
