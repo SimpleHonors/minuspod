@@ -67,7 +67,6 @@ function Settings() {
   const [whisperModel, setWhisperModel] = useState('');
   const [autoProcessEnabled, setAutoProcessEnabled] = useState(true);
   const [maxFeedEpisodes, setMaxFeedEpisodes] = useState(300);
-  const [combinedFeedEpisodeLimit, setCombinedFeedEpisodeLimit] = useState(50);
   const [onlyExposeProcessedDefault, setOnlyExposeProcessedDefault] = useState(false);
   const [audioBitrate, setAudioBitrate] = useState('128k');
   const [vttTranscriptsEnabled, setVttTranscriptsEnabled] = useState(true);
@@ -224,7 +223,7 @@ function Settings() {
     onError: (err: Error) => setTimeoutsError(err.message || 'Failed to save'),
   });
 
-  const [settingsSnapshot, setSettingsSnapshot] = useState(settings);
+  const [settingsSnapshot, setSettingsSnapshot] = useState<typeof settings | undefined>(undefined);
   if (settings !== settingsSnapshot) {
     setSettingsSnapshot(settings);
     if (settings) {
@@ -242,7 +241,6 @@ function Settings() {
       setWhisperModel(settings.whisperModel?.value || 'small');
       setAutoProcessEnabled(settings.autoProcessEnabled?.value ?? true);
       setMaxFeedEpisodes(settings.maxFeedEpisodes?.value ?? 300);
-      setCombinedFeedEpisodeLimit(settings.combinedFeedEpisodeLimit?.value ?? 50);
       setOnlyExposeProcessedDefault(settings.onlyExposeProcessedDefault?.value ?? false);
       setAudioBitrate(settings.audioBitrate?.value || '128k');
       setVttTranscriptsEnabled(settings.vttTranscriptsEnabled?.value ?? true);
@@ -306,7 +304,6 @@ function Settings() {
     if (vttTranscriptsEnabled !== (settings.vttTranscriptsEnabled?.value ?? d.vttTranscriptsEnabled)) payload.vttTranscriptsEnabled = vttTranscriptsEnabled;
     if (chaptersEnabled !== (settings.chaptersEnabled?.value ?? d.chaptersEnabled)) payload.chaptersEnabled = chaptersEnabled;
     if (maxFeedEpisodes !== (settings.maxFeedEpisodes?.value ?? d.maxFeedEpisodes)) payload.maxFeedEpisodes = maxFeedEpisodes;
-    if (combinedFeedEpisodeLimit !== (settings.combinedFeedEpisodeLimit?.value ?? 50)) payload.combinedFeedEpisodeLimit = combinedFeedEpisodeLimit;
     if (minCutConfidence !== (settings.minCutConfidence?.value ?? d.minCutConfidence)) payload.minCutConfidence = minCutConfidence;
 
     return payload;
@@ -437,8 +434,6 @@ function Settings() {
         onAutoProcessEnabledChange={setAutoProcessEnabled}
         maxFeedEpisodes={maxFeedEpisodes}
         onMaxFeedEpisodesChange={setMaxFeedEpisodes}
-        combinedFeedEpisodeLimit={combinedFeedEpisodeLimit}
-        onCombinedFeedEpisodeLimitChange={setCombinedFeedEpisodeLimit}
         onlyExposeProcessedDefault={onlyExposeProcessedDefault}
         onOnlyExposeProcessedDefaultChange={setOnlyExposeProcessedDefault}
       />
