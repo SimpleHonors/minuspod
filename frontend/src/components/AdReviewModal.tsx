@@ -12,10 +12,12 @@ interface Props {
   onSaveAndNext: () => void;
 }
 
-const CONTEXT_SECONDS = 120;             // initial padding before/after the ad
-const WINDOW_STEP_SECONDS = 60;          // expand/shrink button granularity
+const CONTEXT_SECONDS = 120;
+const WINDOW_STEP_SECONDS = 60;
 const PEAK_RESOLUTION_MS = 50;
-const MIN_WINDOW_PAD = 10;               // can't shrink window past this many seconds of context
+const MIN_WINDOW_PAD = 10;
+const MIN_AD_DURATION = 1.0;
+const PLAY_WHILE_DRAG_KEY = 'minuspod.adInbox.playWhileDragging';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -26,25 +28,158 @@ function formatTime(seconds: number): string {
   return `${sign}${m}:${s.toFixed(1).padStart(4, '0')}`;
 }
 
+function loadPlayWhileDragging(): boolean {
+  try {
+    return localStorage.getItem(PLAY_WHILE_DRAG_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function savePlayWhileDragging(v: boolean) {
+  try {
+    localStorage.setItem(PLAY_WHILE_DRAG_KEY, v ? '1' : '0');
+  } catch {
+    /* private mode etc */
+  }
+}
+
+// ----------------------------------------------------------------------
+// Pin: vertical drag handle above the waveform that controls the
+// corresponding ad boundary. Pins ARE the user's drag interface — the
+// wavesurfer region is decorative (drag/resize disabled on it).
+
+interface PinProps {
+  kind: 'start' | 'end';
+  boundary: number;
+  windowStart: number;
+  windowDuration: number;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onChange: (next: number) => void;
+  // Called while drag is in progress so we can scrub audio if enabled.
+  onDragMove?: (next: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  otherBoundary: number;        // for min-separation clamp
+}
+
+function Pin({
+  kind, boundary, windowStart, windowDuration, containerRef,
+  onChange, onDragMove, onDragStart, onDragEnd, otherBoundary,
+}: PinProps) {
+  const [dragging, setDragging] = useState(false);
+
+  const relX = (boundary - windowStart) / windowDuration;
+  const visible = relX >= 0 && relX <= 1;
+  const leftPct = Math.max(0, Math.min(1, relX)) * 100;
+
+  const isStart = kind === 'start';
+  const color = isStart ? 'bg-emerald-500' : 'bg-rose-500';
+  const ringColor = isStart ? 'ring-emerald-500/40' : 'ring-rose-500/40';
+  const labelText = isStart ? 'START' : 'END';
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const container = containerRef.current;
+    if (!container) return;
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+    onDragStart?.();
+
+    const rect = container.getBoundingClientRect();
+
+    const computeBoundary = (clientX: number): number => {
+      const xPct = (clientX - rect.left) / rect.width;
+      const clampedPct = Math.max(0, Math.min(1, xPct));
+      const t = windowStart + clampedPct * windowDuration;
+      // Min-separation: never let start cross end (and vice-versa).
+      if (isStart) return Math.min(t, otherBoundary - MIN_AD_DURATION);
+      return Math.max(t, otherBoundary + MIN_AD_DURATION);
+    };
+
+    const handleMove = (ev: PointerEvent) => {
+      const next = computeBoundary(ev.clientX);
+      onChange(next);
+      onDragMove?.(next);
+    };
+    const handleUp = (ev: PointerEvent) => {
+      const next = computeBoundary(ev.clientX);
+      onChange(next);
+      setDragging(false);
+      onDragEnd?.();
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  };
+
+  if (!visible) return null;
+
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      style={{ left: `${leftPct}%` }}
+      className={`absolute top-0 bottom-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
+        dragging ? 'cursor-grabbing' : ''
+      }`}
+      role="slider"
+      aria-label={`${labelText} pin`}
+      aria-valuenow={Math.round(boundary * 10) / 10}
+    >
+      {/* Vertical line */}
+      <div
+        className={`w-0.5 h-full ${color} ${dragging ? 'opacity-100' : 'opacity-90'} mx-auto shadow-md`}
+      />
+      {/* Top label */}
+      <div
+        className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded ${color} text-white text-[10px] font-bold tracking-wider shadow-md whitespace-nowrap ${
+          dragging ? `ring-4 ${ringColor}` : ''
+        }`}
+      >
+        {labelText} {formatTime(boundary)}
+      </div>
+      {/* Wider hit area */}
+      <div className="absolute inset-y-0 -inset-x-2" />
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+
 function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);   // waveform host
+  const overlayRef = useRef<HTMLDivElement>(null);     // pin overlay (same width as containerRef)
   const audioRef = useRef<HTMLAudioElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
   const adRegionRef = useRef<ReturnType<RegionsPlugin['addRegion']> | null>(null);
 
-  // Window in EPISODE-coordinates. Default = ad ± CONTEXT_SECONDS.
-  const [windowStart, setWindowStart] = useState(Math.max(0, item.start - CONTEXT_SECONDS));
-  const [windowEnd, setWindowEnd] = useState(item.end + CONTEXT_SECONDS);
+  // Defaults derived from the original detection — used by Reset.
+  const defaults = useMemo(
+    () => ({
+      windowStart: Math.max(0, item.start - CONTEXT_SECONDS),
+      windowEnd: item.end + CONTEXT_SECONDS,
+      adStart: (item.correctedBounds ?? item).start,
+      adEnd: (item.correctedBounds ?? item).end,
+    }),
+    [item.start, item.end, item.correctedBounds],
+  );
 
-  // Ad selection in EPISODE-coordinates. Initialized from corrected bounds if any.
-  const initialAd = item.correctedBounds ?? { start: item.start, end: item.end };
-  const [adStart, setAdStart] = useState(initialAd.start);
-  const [adEnd, setAdEnd] = useState(initialAd.end);
+  const [windowStart, setWindowStart] = useState(defaults.windowStart);
+  const [windowEnd, setWindowEnd] = useState(defaults.windowEnd);
+  const [adStart, setAdStart] = useState(defaults.adStart);
+  const [adEnd, setAdEnd] = useState(defaults.adEnd);
 
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [peaksError, setPeaksError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playWhileDrag, setPlayWhileDrag] = useState<boolean>(loadPlayWhileDragging);
+  const wasPlayingBeforeDragRef = useRef(false);
   const [sponsorInput, setSponsorInput] = useState(item.sponsor ?? '');
   const [showSponsorPrompt, setShowSponsorPrompt] = useState(!item.sponsor);
 
@@ -73,12 +208,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   }, [item.podcastSlug, item.episodeId, windowStart, windowEnd]);
 
   // ------------------------------------------------------------------
-  // Mount / re-mount wavesurfer when peaks arrive or window changes.
+  // Mount wavesurfer when peaks/window arrive. Region is decorative —
+  // drag/resize disabled because the Pin components own that interaction.
   useEffect(() => {
     if (!containerRef.current || !peaks) return;
 
-    // Tear down any prior instance — peaks/duration aren't reactive on
-    // wavesurfer instances, so a clean rebuild is the simplest path.
     wsRef.current?.destroy();
     wsRef.current = null;
 
@@ -87,9 +221,9 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       container: containerRef.current,
       peaks: [peaks],
       duration: windowDuration,
-      waveColor: '#64748b',          // slate-500
-      progressColor: '#22d3ee',      // cyan-400
-      cursorColor: '#f59e0b',        // amber-500
+      waveColor: '#64748b',
+      progressColor: '#22d3ee',
+      cursorColor: '#f59e0b',
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
@@ -101,22 +235,15 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
     regionsRef.current = regions;
     wsRef.current = ws;
 
-    // Initial ad region in WINDOW-coords
     const region = regions.addRegion({
       start: Math.max(0, adStart - windowStart),
       end: Math.min(windowDuration, adEnd - windowStart),
-      color: 'rgba(245, 158, 11, 0.25)', // amber tint
-      drag: true,
-      resize: true,
+      color: 'rgba(245, 158, 11, 0.18)',
+      drag: false,
+      resize: false,
     });
     adRegionRef.current = region;
 
-    region.on('update-end', () => {
-      setAdStart(windowStart + region.start);
-      setAdEnd(windowStart + region.end);
-    });
-
-    // Click-to-seek on the waveform syncs the audio element.
     ws.on('interaction', (relTime: number) => {
       if (audioRef.current) {
         audioRef.current.currentTime = windowStart + relTime;
@@ -129,12 +256,26 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       regionsRef.current = null;
       adRegionRef.current = null;
     };
-  }, [peaks, windowDuration, windowStart, adStart, adEnd]);
-  // NOTE: adStart/adEnd in deps so we rebuild after the user keyboard-nudges.
-  // Could be optimized but the rebuild is fast given peaks come from the cache.
+    // Intentionally only re-mount on window/peaks change, not on bound moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peaks, windowDuration, windowStart]);
+
+  // Reflect ad-boundary state into the existing region without rebuilding ws.
+  useEffect(() => {
+    const region = adRegionRef.current;
+    if (!region) return;
+    try {
+      region.setOptions({
+        start: Math.max(0, adStart - windowStart),
+        end: Math.min(windowDuration, adEnd - windowStart),
+      });
+    } catch {
+      /* region torn down mid-update */
+    }
+  }, [adStart, adEnd, windowStart, windowDuration]);
 
   // ------------------------------------------------------------------
-  // Keep wavesurfer cursor in sync with <audio> currentTime via RAF.
+  // Cursor sync: <audio> drives, wavesurfer follows.
   useEffect(() => {
     let raf = 0;
     const loop = () => {
@@ -143,12 +284,10 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       if (audio && ws) {
         const rel = audio.currentTime - windowStart;
         if (rel >= 0 && rel <= windowDuration) {
-          // setTime is the v7 API for nudging the visual cursor.
-          // Falls through silently if backend not ready.
           try {
             (ws as unknown as { setTime: (t: number) => void }).setTime(rel);
           } catch {
-            // ignore
+            /* not ready */
           }
         }
       }
@@ -159,12 +298,11 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   }, [windowStart, windowDuration]);
 
   // ------------------------------------------------------------------
-  // Audio playback handlers.
+  // Audio playback.
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      // If playhead is outside selection, snap to ad start for a useful preview.
       if (audio.currentTime < adStart - 1 || audio.currentTime > adEnd + 1) {
         audio.currentTime = Math.max(0, adStart - 2);
       }
@@ -176,13 +314,48 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   };
 
   // ------------------------------------------------------------------
-  // Window expand / shrink.
+  // Pin drag → optional audio scrub. Plays a tiny preview at the pin's
+  // current time so the user can hear what they're aligning to.
+  const onPinDragStart = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    wasPlayingBeforeDragRef.current = !audio.paused;
+    if (playWhileDrag) {
+      audio.play().catch(() => {});
+    } else if (!audio.paused) {
+      audio.pause();
+    }
+  };
+  const onPinDragMove = (next: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = next;
+  };
+  const onPinDragEnd = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playWhileDrag) {
+      audio.pause();
+      setIsPlaying(false);
+    } else if (wasPlayingBeforeDragRef.current) {
+      audio.play().catch(() => {});
+    }
+  };
+
+  // ------------------------------------------------------------------
+  // Window expand / shrink / reset.
   const expandBack = () => setWindowStart((s) => Math.max(0, s - WINDOW_STEP_SECONDS));
   const expandForward = () => setWindowEnd((e) => e + WINDOW_STEP_SECONDS);
   const shrinkBack = () =>
     setWindowStart((s) => Math.min(adStart - MIN_WINDOW_PAD, s + WINDOW_STEP_SECONDS));
   const shrinkForward = () =>
     setWindowEnd((e) => Math.max(adEnd + MIN_WINDOW_PAD, e - WINDOW_STEP_SECONDS));
+  const resetView = () => {
+    setWindowStart(defaults.windowStart);
+    setWindowEnd(defaults.windowEnd);
+    setAdStart(defaults.adStart);
+    setAdEnd(defaults.adEnd);
+  };
 
   // ------------------------------------------------------------------
   // Mutations
@@ -191,8 +364,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
       submitCorrection(item.podcastSlug, item.episodeId, {
         type: 'confirm',
         original_ad: {
-          start: item.start,
-          end: item.end,
+          start: item.start, end: item.end,
           pattern_id: item.patternId ?? undefined,
           confidence: item.confidence ?? undefined,
           reason: item.reason ?? undefined,
@@ -201,14 +373,12 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
         sponsor: sponsorInput.trim() || undefined,
       }),
   });
-
   const rejectMutation = useMutation({
     mutationFn: () =>
       submitCorrection(item.podcastSlug, item.episodeId, {
         type: 'reject',
         original_ad: {
-          start: item.start,
-          end: item.end,
+          start: item.start, end: item.end,
           pattern_id: item.patternId ?? undefined,
           confidence: item.confidence ?? undefined,
           reason: item.reason ?? undefined,
@@ -216,14 +386,12 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
         },
       }),
   });
-
   const adjustMutation = useMutation({
     mutationFn: () =>
       submitCorrection(item.podcastSlug, item.episodeId, {
         type: 'adjust',
         original_ad: {
-          start: item.start,
-          end: item.end,
+          start: item.start, end: item.end,
           pattern_id: item.patternId ?? undefined,
           confidence: item.confidence ?? undefined,
           reason: item.reason ?? undefined,
@@ -242,11 +410,8 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
     Math.abs(adStart - item.start) > 0.05 || Math.abs(adEnd - item.end) > 0.05;
 
   const handleConfirm = async () => {
-    if (boundariesMoved) {
-      await adjustMutation.mutateAsync();
-    } else {
-      await confirmMutation.mutateAsync();
-    }
+    if (boundariesMoved) await adjustMutation.mutateAsync();
+    else await confirmMutation.mutateAsync();
     onSaveAndNext();
   };
 
@@ -259,41 +424,17 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
   // Hotkeys
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Don't hijack input typing
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-        if (e.key !== 'Escape') return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-        return;
-      }
-      if (e.key === ' ') {
-        e.preventDefault();
-        togglePlay();
-        return;
-      }
-      if (e.key === ',') {
-        e.preventDefault();
-        expandBack();
-        return;
-      }
-      if (e.key === '.') {
-        e.preventDefault();
-        expandForward();
-        return;
-      }
-      if (e.key === 'c' || e.key === 'C') {
-        e.preventDefault();
-        if (!isBusy) handleConfirm();
-        return;
-      }
-      if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault();
-        if (!isBusy) handleReject();
-        return;
-      }
+      const inField =
+        target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      if (inField && e.key !== 'Escape') return;
+
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key === ' ')      { e.preventDefault(); togglePlay(); return; }
+      if (e.key === ',')      { e.preventDefault(); expandBack(); return; }
+      if (e.key === '.')      { e.preventDefault(); expandForward(); return; }
+      if (e.key === 'c' || e.key === 'C') { e.preventDefault(); if (!isBusy) handleConfirm(); return; }
+      if (e.key === 'r' || e.key === 'R') { e.preventDefault(); if (!isBusy) handleReject(); return; }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const audio = audioRef.current;
         if (!audio) return;
@@ -304,7 +445,25 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBusy, onClose, sponsorInput, adStart, adEnd, item.start, item.end]);
+
+  // ------------------------------------------------------------------
+  // Style helpers — explicit hover treatments so buttons clearly
+  // highlight on mouseover instead of looking washed out.
+
+  const primaryBtn =
+    'bg-primary text-primary-foreground transition-all ' +
+    'hover:bg-primary hover:ring-2 hover:ring-primary hover:ring-offset-2 hover:ring-offset-card ' +
+    'disabled:opacity-50 disabled:cursor-not-allowed';
+  const destructiveBtn =
+    'bg-destructive text-destructive-foreground transition-all ' +
+    'hover:bg-destructive hover:ring-2 hover:ring-destructive hover:ring-offset-2 hover:ring-offset-card ' +
+    'disabled:opacity-50 disabled:cursor-not-allowed';
+  const ghostBtn =
+    'border border-border text-foreground bg-card transition-colors ' +
+    'hover:bg-accent hover:text-accent-foreground hover:border-foreground/30 ' +
+    'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-card disabled:hover:text-foreground disabled:hover:border-border';
 
   // ------------------------------------------------------------------
 
@@ -332,7 +491,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+            className="p-1 rounded text-muted-foreground transition-colors hover:text-foreground hover:bg-accent"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -341,76 +500,104 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
           </button>
         </div>
 
-        {/* Waveform */}
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between mb-2 text-xs text-muted-foreground tabular-nums">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={expandBack}
-                className="px-2 py-1 rounded border border-border hover:bg-accent"
-                title="Expand window 1 min earlier ( , )"
-              >
-                « +1m
-              </button>
-              <button
-                type="button"
-                onClick={shrinkBack}
-                disabled={windowStart >= adStart - MIN_WINDOW_PAD - WINDOW_STEP_SECONDS}
-                className="px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-40"
-                title="Shrink window from the left"
-              >
-                » −1m
-              </button>
-              <span className="ml-2">{formatTime(windowStart)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span>{formatTime(windowEnd)}</span>
-              <button
-                type="button"
-                onClick={shrinkForward}
-                disabled={windowEnd <= adEnd + MIN_WINDOW_PAD + WINDOW_STEP_SECONDS}
-                className="ml-2 px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-40"
-                title="Shrink window from the right"
-              >
-                « −1m
-              </button>
-              <button
-                type="button"
-                onClick={expandForward}
-                className="px-2 py-1 rounded border border-border hover:bg-accent"
-                title="Expand window 1 min later ( . )"
-              >
-                +1m »
-              </button>
-            </div>
+        {/* Window controls + reset */}
+        <div className="px-6 pt-4 flex items-center justify-between gap-2 flex-wrap text-xs text-muted-foreground tabular-nums">
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={expandBack}
+              className={`px-2 py-1 rounded ${ghostBtn}`}
+              title="Expand window 1 min earlier ( , )">« +1m</button>
+            <button type="button" onClick={shrinkBack}
+              disabled={windowStart >= adStart - MIN_WINDOW_PAD - WINDOW_STEP_SECONDS}
+              className={`px-2 py-1 rounded ${ghostBtn}`}
+              title="Shrink window from the left">» −1m</button>
+            <span className="ml-2">{formatTime(windowStart)}</span>
           </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={playWhileDrag}
+                onChange={(e) => {
+                  setPlayWhileDrag(e.target.checked);
+                  savePlayWhileDragging(e.target.checked);
+                }}
+                className="accent-primary"
+              />
+              <span>Play audio while dragging pin</span>
+            </label>
+            <button type="button" onClick={resetView}
+              className={`px-2 py-1 rounded ${ghostBtn}`}
+              title="Reset waveform window + ad bounds to defaults">↻ Reset</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span>{formatTime(windowEnd)}</span>
+            <button type="button" onClick={shrinkForward}
+              disabled={windowEnd <= adEnd + MIN_WINDOW_PAD + WINDOW_STEP_SECONDS}
+              className={`ml-2 px-2 py-1 rounded ${ghostBtn}`}
+              title="Shrink window from the right">« −1m</button>
+            <button type="button" onClick={expandForward}
+              className={`px-2 py-1 rounded ${ghostBtn}`}
+              title="Expand window 1 min later ( . )">+1m »</button>
+          </div>
+        </div>
 
-          <div className="bg-secondary/40 rounded-lg p-3 min-h-[140px] flex items-center justify-center">
+        {/* Waveform + pin overlay */}
+        <div className="px-6 py-4">
+          <div className="bg-secondary/40 rounded-lg p-3 min-h-[180px]">
             {peaksError ? (
               <p className="text-sm text-destructive">Failed to load waveform: {peaksError}</p>
             ) : !peaks ? (
               <p className="text-sm text-muted-foreground">Loading waveform…</p>
             ) : (
-              <div ref={containerRef} className="w-full" />
+              <div className="relative pt-8" ref={overlayRef}>
+                {/* Pins live in the same horizontal coordinate system as the
+                    waveform container. The pt-8 above gives them headroom
+                    for their START/END labels. */}
+                <Pin
+                  kind="start"
+                  boundary={adStart}
+                  windowStart={windowStart}
+                  windowDuration={windowDuration}
+                  containerRef={containerRef}
+                  otherBoundary={adEnd}
+                  onChange={setAdStart}
+                  onDragStart={onPinDragStart}
+                  onDragMove={playWhileDrag ? onPinDragMove : undefined}
+                  onDragEnd={onPinDragEnd}
+                />
+                <Pin
+                  kind="end"
+                  boundary={adEnd}
+                  windowStart={windowStart}
+                  windowDuration={windowDuration}
+                  containerRef={containerRef}
+                  otherBoundary={adStart}
+                  onChange={setAdEnd}
+                  onDragStart={onPinDragStart}
+                  onDragMove={playWhileDrag ? onPinDragMove : undefined}
+                  onDragEnd={onPinDragEnd}
+                />
+                <div ref={containerRef} className="w-full" />
+              </div>
             )}
           </div>
 
           {/* Boundaries readout */}
           <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground tabular-nums">
             <span>
-              Selection: <span className="text-foreground">{formatTime(adStart)}</span> –{' '}
-              <span className="text-foreground">{formatTime(adEnd)}</span>{' '}
-              <span className="text-xs">({Math.round(adEnd - adStart)}s)</span>
+              Selection:{' '}
+              <span className="text-emerald-500 font-medium">{formatTime(adStart)}</span>{' '}
+              –{' '}
+              <span className="text-rose-500 font-medium">{formatTime(adEnd)}</span>{' '}
+              <span className="text-xs">({Math.round((adEnd - adStart) * 10) / 10}s)</span>
             </span>
             {boundariesMoved && (
               <span className="text-xs text-amber-500">
-                (was {formatTime(item.start)} – {formatTime(item.end)})
+                (originally {formatTime(item.start)} – {formatTime(item.end)})
               </span>
             )}
           </div>
 
-          {/* Hidden audio for playback. Browser handles MP3 range/seek. */}
           <audio
             ref={audioRef}
             src={audioUrl}
@@ -420,23 +607,22 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
             onEnded={() => setIsPlaying(false)}
           />
 
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={togglePlay}
-              className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm hover:bg-primary/90"
-              title="Play / pause (Space)"
-            >
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <button type="button" onClick={togglePlay}
+              className={`px-3 py-1.5 rounded-lg ${primaryBtn} text-sm`}
+              title="Play / pause (Space)">
               {isPlaying ? 'Pause' : 'Play'}
             </button>
             <span className="text-xs text-muted-foreground">
-              Drag the amber region edges to adjust • <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • <kbd>C</kbd> confirm • <kbd>R</kbd> reject
+              Drag the <span className="text-emerald-500 font-semibold">START</span> /{' '}
+              <span className="text-rose-500 font-semibold">END</span> pins above the waveform.{' '}
+              <kbd>Space</kbd> play • <kbd>,</kbd>/<kbd>.</kbd> expand window • <kbd>C</kbd> confirm • <kbd>R</kbd> reject
             </span>
           </div>
         </div>
 
-        {/* Sponsor prompt (shown when extractor returned empty) */}
-        {showSponsorPrompt && (
+        {/* Sponsor prompt */}
+        {showSponsorPrompt ? (
           <div className="px-6 py-4 border-t border-border bg-secondary/30">
             <label htmlFor="sponsor" className="block text-sm font-medium text-foreground mb-1">
               Sponsor name
@@ -445,25 +631,17 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
               </span>
             </label>
             <input
-              id="sponsor"
-              type="text"
-              value={sponsorInput}
+              id="sponsor" type="text" value={sponsorInput}
               onChange={(e) => setSponsorInput(e.target.value)}
               placeholder="e.g. BetterHelp, Squarespace, Progressive"
               className="w-full px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring text-sm"
             />
           </div>
-        )}
-        {!showSponsorPrompt && (
+        ) : (
           <div className="px-6 py-2 border-t border-border text-xs text-muted-foreground">
             Sponsor: <span className="text-foreground">{item.sponsor}</span>{' '}
-            <button
-              type="button"
-              onClick={() => setShowSponsorPrompt(true)}
-              className="ml-2 underline hover:text-foreground"
-            >
-              edit
-            </button>
+            <button type="button" onClick={() => setShowSponsorPrompt(true)}
+              className="ml-2 underline transition-colors hover:text-foreground">edit</button>
           </div>
         )}
 
@@ -475,22 +653,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext }: Props) {
               : 'Confirm will record this ad as-detected.'}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleReject}
-              disabled={isBusy}
-              className="px-4 py-1.5 rounded-lg bg-destructive text-destructive-foreground text-sm hover:bg-destructive/90 disabled:opacity-50"
-              title="Mark as not an ad (R)"
-            >
-              {rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
+            <button type="button" onClick={handleReject} disabled={isBusy}
+              className={`px-4 py-1.5 rounded-lg ${destructiveBtn} text-sm`}
+              title="Mark as not an ad and advance (R)">
+              {rejectMutation.isPending ? 'Rejecting…' : 'Reject & Next'}
             </button>
-            <button
-              type="button"
-              onClick={handleConfirm}
-              disabled={isBusy}
-              className="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50"
-              title="Save & next (C)"
-            >
+            <button type="button" onClick={handleConfirm} disabled={isBusy}
+              className={`px-4 py-1.5 rounded-lg ${primaryBtn} text-sm`}
+              title="Save & next (C)">
               {confirmMutation.isPending || adjustMutation.isPending
                 ? 'Saving…'
                 : boundariesMoved
