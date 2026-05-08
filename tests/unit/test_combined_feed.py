@@ -181,12 +181,12 @@ class TestBuildCombinedFeed:
 
         root = ET.fromstring(xml)
         image_url = root.find('./channel/image/url').text
-        assert image_url == 'http://10.0.0.190:8080/ui/logo.png'
+        assert image_url == 'http://10.0.0.190:8080/ui/feed-icon.png'
         # itunes:image with the same href (Apple Podcasts requires it)
         ns = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
         itunes_image = root.find('./channel/itunes:image', ns)
         assert itunes_image is not None
-        assert itunes_image.attrib['href'] == 'http://10.0.0.190:8080/ui/logo.png'
+        assert itunes_image.attrib['href'] == 'http://10.0.0.190:8080/ui/feed-icon.png'
 
     def test_skips_rows_missing_required_keys(self):
         parser = RSSParser(base_url='http://10.0.0.190:8080')
