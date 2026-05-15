@@ -95,7 +95,7 @@ class SettingsMixin:
         and also trips the plaintext-secret read warning.
         """
         # Import here to avoid circular import
-        from database import DEFAULT_SYSTEM_PROMPT, DEFAULT_VERIFICATION_PROMPT
+        from database import DEFAULT_SYSTEM_PROMPT, DEFAULT_VERIFICATION_PROMPT, DEFAULT_REVIEW_PROMPT, DEFAULT_RESURRECT_PROMPT
         from config import DEFAULT_AD_DETECTION_MODEL as DEFAULT_MODEL
         from chapters_generator import CHAPTERS_MODEL
         from config import PROVIDER_ANTHROPIC
@@ -119,6 +119,8 @@ class SettingsMixin:
         defaults = {
             'system_prompt': DEFAULT_SYSTEM_PROMPT,
             'verification_prompt': DEFAULT_VERIFICATION_PROMPT,
+            'review_prompt': DEFAULT_REVIEW_PROMPT,
+            'resurrect_prompt': DEFAULT_RESURRECT_PROMPT,
             'retention_period_minutes': os.environ.get('RETENTION_PERIOD', '1440'),
             'claude_model': model_default,
             'verification_model': model_default,
@@ -138,6 +140,8 @@ class SettingsMixin:
             'vad_gap_start_min_seconds': os.environ.get('VAD_GAP_START_MIN_SECONDS', '3.0'),
             'vad_gap_mid_min_seconds': os.environ.get('VAD_GAP_MID_MIN_SECONDS', '8.0'),
             'vad_gap_tail_min_seconds': os.environ.get('VAD_GAP_TAIL_MIN_SECONDS', '3.0'),
+            'audio_normalize_enabled': 'false',
+            'audio_normalize_intensity': 'aggressive',
         }
 
         if key in defaults:

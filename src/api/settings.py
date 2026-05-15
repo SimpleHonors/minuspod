@@ -245,6 +245,10 @@ def get_settings():
     review_prompt = _setting_value(settings, 'review_prompt', DEFAULT_REVIEW_PROMPT)
     resurrect_prompt = _setting_value(settings, 'resurrect_prompt', DEFAULT_RESURRECT_PROMPT)
 
+    audio_normalize_enabled_raw = _setting_value(settings, 'audio_normalize_enabled', 'false')
+    audio_normalize_enabled = str(audio_normalize_enabled_raw).lower() in ('true', '1', 'yes')
+    audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'aggressive')
+
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT)),
         'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT)),
@@ -280,6 +284,8 @@ def get_settings():
         'vadGapStartMinSeconds': _sv('vad_gap_start_min_seconds', vad_gap_start),
         'vadGapMidMinSeconds': _sv('vad_gap_mid_min_seconds', vad_gap_mid),
         'vadGapTailMinSeconds': _sv('vad_gap_tail_min_seconds', vad_gap_tail),
+        'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
+        'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
         'stageTunables': tunables_payload,
@@ -350,6 +356,7 @@ def update_ad_detection_settings():
         _apply_provider_fields,
         _apply_whisper_fields,
         _apply_vad_gap_fields,
+        _apply_audio_normalize_fields,
         _apply_podcast_index_fields,
         _apply_stage_tunables,
     )
@@ -640,6 +647,29 @@ def _apply_vad_gap_fields(db, data):
     return None
 
 
+def _apply_audio_normalize_fields(db, data):
+    """Persist dynaudnorm second-pass loudness normalization toggle + intensity."""
+    if 'audioNormalizeEnabled' in data:
+        raw = data['audioNormalizeEnabled']
+        if isinstance(raw, bool):
+            enabled = raw
+        else:
+            enabled = str(raw).strip().lower() in ('true', '1', 'yes')
+        db.set_setting('audio_normalize_enabled', 'true' if enabled else 'false', is_default=False)
+        logger.info(f"Updated audio_normalize_enabled to: {enabled}")
+
+    if 'audioNormalizeIntensity' in data:
+        valid_intensities = ('gentle', 'normal', 'aggressive')
+        intensity_val = str(data['audioNormalizeIntensity']).strip().lower()
+        if intensity_val not in valid_intensities:
+            return json_response(
+                {'error': f'audioNormalizeIntensity must be one of: {", ".join(valid_intensities)}'}, 400
+            )
+        db.set_setting('audio_normalize_intensity', intensity_val, is_default=False)
+        logger.info(f"Updated audio_normalize_intensity to: {intensity_val}")
+    return None
+
+
 def _apply_podcast_index_fields(db, data):
     """Persist Podcast Index API credentials via the secret writer."""
     if 'podcastIndexApiKey' in data:
@@ -791,6 +821,8 @@ def reset_ad_detection_settings():
     db.reset_setting('vad_gap_start_min_seconds')
     db.reset_setting('vad_gap_mid_min_seconds')
     db.reset_setting('vad_gap_tail_min_seconds')
+    db.reset_setting('audio_normalize_enabled')
+    db.reset_setting('audio_normalize_intensity')
 
     # Recreate LLM client with reset settings
     client = get_llm_client(force_new=True)
