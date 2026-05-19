@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getAdInbox,
@@ -97,6 +97,33 @@ const BULK_CONCURRENCY = 5;
 
 type BulkAction = 'confirm' | 'reject' | 'skip';
 
+// Group items by episode and surface time-range overlaps. Two ads
+// "touch" when their [start, end] ranges intersect at all -- intentionally
+// looser than the backend's 50% overlap rule, because for a *triage hint*
+// we want to flag anything worth a second look. Used by the inbox row to
+// show an overlap badge so the user can decide between case-A (distinct
+// back-to-back ads, confirm individually) vs case-B (same ad detected
+// twice with different bounds, confirm one + reject the other).
+function computeOverlapPeers(items: InboxItem[]): Map<string, InboxItem[]> {
+  const byEpisode = new Map<string, InboxItem[]>();
+  for (const it of items) {
+    const list = byEpisode.get(it.episodeId);
+    if (list) list.push(it);
+    else byEpisode.set(it.episodeId, [it]);
+  }
+  const out = new Map<string, InboxItem[]>();
+  for (const list of byEpisode.values()) {
+    if (list.length < 2) continue;
+    for (const a of list) {
+      const peers = list.filter(
+        (b) => b !== a && b.start < a.end && a.start < b.end,
+      );
+      if (peers.length > 0) out.set(itemKey(a), peers);
+    }
+  }
+  return out;
+}
+
 function AdInboxPage() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<InboxStatusFilter>('pending');
@@ -151,6 +178,9 @@ function AdInboxPage() {
     : allItems.filter((it) => !skipped.has(itemKey(it)));
   const skippedCount = allItems.length - items.length;
   const counts = data?.counts;
+  // Compute overlap peers from the full loaded set (not just visible)
+  // so even hidden skipped items are considered when judging overlap.
+  const overlapPeers = useMemo(() => computeOverlapPeers(allItems), [allItems]);
 
   const closeModal = () => setActiveItem(null);
 
@@ -431,7 +461,28 @@ function AdInboxPage() {
                       {it.episodeTitle ?? it.episodeId}
                     </div>
                   </td>
-                  <td className="px-4 py-2 text-foreground">{it.sponsor ?? <span className="text-muted-foreground italic">unknown</span>}</td>
+                  <td className="px-4 py-2 text-foreground">
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {it.sponsor ?? <span className="text-muted-foreground italic">unknown</span>}
+                      </span>
+                      {(() => {
+                        const peers = overlapPeers.get(key);
+                        if (!peers || peers.length === 0) return null;
+                        const tooltip = peers
+                          .map((p) => `${p.sponsor ?? 'unknown'} (${formatTime(p.start)}–${formatTime(p.end)})`)
+                          .join('\n');
+                        return (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 cursor-help whitespace-nowrap"
+                            title={`Overlaps with ${peers.length} other ad${peers.length === 1 ? '' : 's'} on this episode:\n${tooltip}`}
+                          >
+                            ↔ {peers.length} overlap{peers.length === 1 ? '' : 's'}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </td>
                   <td className="px-4 py-2 text-muted-foreground tabular-nums">
                     {formatTime(it.start)} – {formatTime(it.end)}
                   </td>

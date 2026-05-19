@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Play, Pause, SkipBack, SkipForward, Rewind, FastForward, Square,
   ZoomIn, ZoomOut,
+  ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
@@ -1138,8 +1139,20 @@ function AdReviewModal({
             )}
           </div>
 
-          {/* Zoom slider */}
+          {/* Zoom slider + window-extend buttons.
+              ←+1m / +1m→ grow the visible waveform window outward in
+              60s steps. Use this when an ad extends beyond the
+              auto-fitted view (long pre/post-rolls, monster
+              sponsorships, etc.). Mirrors the existing `,` / `.`
+              keyboard shortcuts; this just makes them discoverable. */}
           <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <button type="button" onClick={expandBack}
+              disabled={windowStart <= 0}
+              className={`px-2 py-1.5 rounded ${ghostBtn} inline-flex items-center gap-1`}
+              title="Extend window 1 minute earlier (,)">
+              <ChevronsLeft className="w-3.5 h-3.5" />
+              <span className="font-medium">+1m</span>
+            </button>
             <button type="button" onClick={zoomOut}
               disabled={zoom <= ZOOM_MIN + 0.01}
               className={`p-1.5 rounded ${ghostBtn}`}
@@ -1163,6 +1176,13 @@ function AdReviewModal({
               <ZoomIn className="w-3.5 h-3.5" />
             </button>
             <span className="tabular-nums w-10 text-right">{zoom.toFixed(1)}×</span>
+            <button type="button" onClick={expandForward}
+              disabled={!!episodeDuration && windowEnd >= episodeDuration}
+              className={`px-2 py-1.5 rounded ${ghostBtn} inline-flex items-center gap-1`}
+              title="Extend window 1 minute later (.)">
+              <span className="font-medium">+1m</span>
+              <ChevronsRight className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Full-episode scrubber: dim band = visible waveform window,
