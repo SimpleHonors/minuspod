@@ -6,7 +6,8 @@ import {
   type InboxStatusFilter,
 } from '../api/adInbox';
 import LoadingSpinner from '../components/LoadingSpinner';
-import AdReviewModal from '../components/AdReviewModal';
+import AdReviewModal, { type AdReviewItem, type AdReviewSubmit } from '../components/AdReviewModal';
+import { submitCorrection } from '../api/patterns';
 
 const STATUS_TABS: { id: InboxStatusFilter; label: string }[] = [
   { id: 'pending', label: 'Pending' },
@@ -50,6 +51,41 @@ function statusPillClass(status: InboxItem['status']): string {
 
 function itemKey(it: { podcastSlug: string; episodeId: string; adIndex: number }): string {
   return `${it.podcastSlug}:${it.episodeId}:${it.adIndex}`;
+}
+
+// Adapter: project an inbox-shaped item onto the per-episode AdEditor's
+// AdReviewItem interface. Drops inbox-only metadata (title, status, etc.)
+// since the modal doesn't need it.
+function inboxItemToReviewItem(it: InboxItem): AdReviewItem {
+  return {
+    podcastSlug: it.podcastSlug,
+    episodeId: it.episodeId,
+    start: it.start,
+    end: it.end,
+    sponsor: it.sponsor,
+    reason: it.reason,
+    confidence: it.confidence,
+    detectionStage: it.detectionStage,
+    patternId: it.patternId,
+    correctedBounds: it.correctedBounds,
+  };
+}
+
+// Adapter: translate the modal's onSubmit intent into the
+// pattern-correction API call the inbox previously made internally.
+async function applySubmission(item: InboxItem, s: AdReviewSubmit): Promise<void> {
+  await submitCorrection(item.podcastSlug, item.episodeId, {
+    type: s.kind,
+    original_ad: {
+      start: item.start,
+      end: item.end,
+      sponsor: item.sponsor ?? undefined,
+      pattern_id: item.patternId ?? undefined,
+    },
+    adjusted_start: s.adjustedStart,
+    adjusted_end: s.adjustedEnd,
+    sponsor: s.sponsor,
+  });
 }
 
 const PAGE_SIZE = 50;
@@ -303,10 +339,14 @@ function AdInboxPage() {
       {activeItem && (
         <AdReviewModal
           key={itemKey(activeItem)}
-          item={activeItem}
+          item={inboxItemToReviewItem(activeItem)}
           onClose={closeModal}
-          onSaveAndNext={handleSaveAndNext}
+          onSubmit={async (s) => {
+            await applySubmission(activeItem, s);
+            handleSaveAndNext();
+          }}
           onSkip={handleSkip}
+          hasNext={items.length > 1}
         />
       )}
     </div>
