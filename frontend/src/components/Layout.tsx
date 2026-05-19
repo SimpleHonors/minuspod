@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
+import { useInboxPendingCount } from '../hooks/useInboxPendingCount';
 
 const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/', label: 'Dashboard' },
@@ -17,20 +18,34 @@ interface NavLinkProps {
   label: string;
   active: boolean;
   onClick?: () => void;
+  // When > 0, renders a small numeric pill next to the label. Values
+  // above 99 collapse to "99+" to keep the badge from blowing out the
+  // nav layout on mobile.
+  badge?: number;
 }
 
-function NavLink({ to, label, active, onClick }: NavLinkProps) {
+function NavLink({ to, label, active, onClick, badge }: NavLinkProps) {
+  const showBadge = typeof badge === 'number' && badge > 0;
+  const badgeText = showBadge && (badge as number) > 99 ? '99+' : String(badge ?? '');
   return (
     <Link
       to={to}
       onClick={onClick}
-      className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+      className={`px-3 py-2 rounded-md text-sm font-medium transition-colors inline-flex items-center gap-2 ${
         active
           ? 'bg-primary text-primary-foreground'
           : 'text-muted-foreground hover:text-foreground hover:bg-accent'
       }`}
     >
-      {label}
+      <span>{label}</span>
+      {showBadge && (
+        <span
+          className="bg-red-500 text-white text-[10px] font-bold leading-none px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center"
+          aria-label={`${badge} pending`}
+        >
+          {badgeText}
+        </span>
+      )}
     </Link>
   );
 }
@@ -44,6 +59,7 @@ function Layout() {
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const inboxPending = useInboxPendingCount();
   // Reset the mobile menu when the route changes. React's docs explicitly
   // recommend the render-phase "adjust state on prop change" idiom over a
   // setState-in-useEffect, which the new react-compiler lint rule rejects.
@@ -74,6 +90,7 @@ function Layout() {
                     to={item.to}
                     label={item.label}
                     active={isPathActive(location.pathname, item.to)}
+                    badge={item.to === '/inbox' ? inboxPending : undefined}
                   />
                 ))}
               </nav>
@@ -142,6 +159,7 @@ function Layout() {
                   label={item.label}
                   active={isPathActive(location.pathname, item.to)}
                   onClick={() => setMobileMenuOpen(false)}
+                  badge={item.to === '/inbox' ? inboxPending : undefined}
                 />
               ))}
             </nav>

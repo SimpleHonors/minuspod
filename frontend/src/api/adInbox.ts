@@ -30,21 +30,28 @@ export interface InboxResponse {
   limit: number;
   offset: number;
   status: InboxStatusFilter;
+  podcastSlug: string | null;
   counts: {
     pending: number;
     confirmed: number;
     rejected: number;
     adjusted: number;
   };
+  podcastsWithMatches: { slug: string; title: string }[];
 }
 
 export async function getAdInbox(
   status: InboxStatusFilter = 'pending',
   limit = 50,
   offset = 0,
+  podcastSlug: string | null = null,
 ): Promise<InboxResponse> {
   // buildQueryString already returns the leading "?" (or "" when empty).
-  const qs = buildQueryString({ status, limit, offset });
+  // Omit podcast_slug when null/empty so the backend doesn't see a literal
+  // "null" string -- the slug filter is case-folded server-side.
+  const params: Record<string, string | number> = { status, limit, offset };
+  if (podcastSlug) params.podcast_slug = podcastSlug;
+  const qs = buildQueryString(params);
   return apiRequest<InboxResponse>(`/ad-inbox${qs}`);
 }
 

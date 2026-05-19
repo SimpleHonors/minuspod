@@ -19,6 +19,9 @@ CORRECTION_TYPE_TO_STATUS = {
     'false_positive': 'rejected',
     'boundary_adjustment': 'adjusted',
     'promotion': 'confirmed',
+    # User created the ad themselves via the modal's create mode -- treat
+    # that as confirmation by definition. Same rollup tab as 'confirm'.
+    'create': 'confirmed',
 }
 
 VALID_INBOX_STATUSES = {'pending', 'confirmed', 'rejected', 'adjusted', 'all'}
@@ -51,6 +54,20 @@ def enumerate_inbox_items(db) -> Iterator[dict]:
     corrections_by_episode: dict[str, list[dict]] = {}
     for c in db.get_corrections_for_episodes(episode_ids):
         corrections_by_episode.setdefault(c['episode_id'], []).append(c)
+    # Sort each episode's corrections newest-first so the status-derivation
+    # loop picks up the user's most recent intent. Without this, the order
+    # comes back unspecified from SQLite (effectively insertion order, i.e.
+    # the oldest correction wins) and a confirm-after-reject flow would
+    # still show 'rejected' until the user deleted the older row.
+    #
+    # Tiebreak on id DESC: SQLite created_at is to-the-second, so rapid
+    # back-to-back corrections can share a timestamp. Auto-increment id
+    # guarantees the row inserted last always wins regardless of clock res.
+    for ep_id in corrections_by_episode:
+        corrections_by_episode[ep_id].sort(
+            key=lambda c: (c.get('created_at') or '', c.get('id') or 0),
+            reverse=True,
+        )
 
     for row in rows:
         try:

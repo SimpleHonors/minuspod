@@ -94,9 +94,18 @@ function AdInboxPage() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<InboxStatusFilter>('pending');
   const [page, setPage] = useState(0);
+  // Podcast filter: null means "all podcasts". Cleared whenever the
+  // status tab changes so the user doesn't end up on (status=adjusted,
+  // podcast=X) and see zero results because X has no adjusted ads.
+  const [podcastSlug, setPodcastSlug] = useState<string | null>(null);
   // Reset to page 0 whenever the status filter changes.
   const setStatusAndResetPage = (s: InboxStatusFilter) => {
     setStatus(s);
+    setPage(0);
+    setPodcastSlug(null);
+  };
+  const setPodcastAndResetPage = (slug: string | null) => {
+    setPodcastSlug(slug);
     setPage(0);
   };
   // Track the active item by identity (not index). Index-based tracking
@@ -111,8 +120,8 @@ function AdInboxPage() {
   const [showSkipped, setShowSkipped] = useState(false);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['ad-inbox', status, page],
-    queryFn: () => getAdInbox(status, PAGE_SIZE, page * PAGE_SIZE),
+    queryKey: ['ad-inbox', status, page, podcastSlug],
+    queryFn: () => getAdInbox(status, PAGE_SIZE, page * PAGE_SIZE, podcastSlug),
     staleTime: 5_000,
   });
 
@@ -223,6 +232,25 @@ function AdInboxPage() {
           >
             {showSkipped ? 'Hide skipped' : `Show skipped (${skipped.size})`}
           </button>
+        )}
+
+        {/* Podcast filter: only render when there's >1 podcast with items
+            under the current status tab (otherwise the dropdown is just
+            "All" + a single podcast = pointless UI). */}
+        {data && data.podcastsWithMatches.length > 1 && (
+          <select
+            className="ml-auto px-3 py-1.5 rounded-lg border border-border bg-card text-foreground text-sm hover:bg-accent transition-colors"
+            value={podcastSlug ?? ''}
+            onChange={(e) => setPodcastAndResetPage(e.target.value || null)}
+            aria-label="Filter by podcast"
+          >
+            <option value="">All podcasts ({data.podcastsWithMatches.length})</option>
+            {data.podcastsWithMatches.map((p) => (
+              <option key={p.slug} value={p.slug}>
+                {p.title}
+              </option>
+            ))}
+          </select>
         )}
         {skipped.size > 0 && (
           <button

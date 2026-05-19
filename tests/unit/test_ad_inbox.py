@@ -133,3 +133,42 @@ class TestEnumerateInbox:
         _seed_episode_with_ads(temp_db, 'pod-d', 'e5', [])
 
         assert list(_enumerate_inbox_items(temp_db)) == []
+
+    def test_latest_correction_wins_for_overlapping_ad(self, temp_db):
+        """When the user changes their mind, the newest correction defines
+        the inbox status. Reject-then-confirm should end up confirmed."""
+        from ad_inbox_service import enumerate_inbox_items as _enumerate_inbox_items
+        _seed_episode_with_ads(temp_db, 'pod-e', 'e6', [
+            {'start': 100.0, 'end': 130.0, 'sponsor': 'BetterHelp',
+             'reason': 'therapy', 'confidence': 0.9,
+             'detection_stage': 'llm', 'pattern_id': None},
+        ])
+        # First the user rejects, then later confirms.
+        temp_db.create_pattern_correction(
+            correction_type='false_positive', episode_id='e6',
+            original_bounds={'start': 100.0, 'end': 130.0})
+        temp_db.create_pattern_correction(
+            correction_type='confirm', episode_id='e6',
+            original_bounds={'start': 100.0, 'end': 130.0})
+
+        items = [i for i in _enumerate_inbox_items(temp_db) if i['episodeId'] == 'e6']
+        assert len(items) == 1
+        assert items[0]['status'] == 'confirmed'
+
+    def test_create_correction_maps_to_confirmed(self, temp_db):
+        """User-created ads (correction_type='create') roll up under the
+        Confirmed tab. Verifies CORRECTION_TYPE_TO_STATUS handles 'create'."""
+        from ad_inbox_service import enumerate_inbox_items as _enumerate_inbox_items
+        _seed_episode_with_ads(temp_db, 'pod-f', 'e7', [
+            {'start': 200.0, 'end': 230.0, 'sponsor': 'Manually Added',
+             'reason': 'user-created', 'confidence': 1.0,
+             'detection_stage': 'manual', 'pattern_id': None},
+        ])
+        temp_db.create_pattern_correction(
+            correction_type='create', episode_id='e7',
+            corrected_bounds={'start': 200.0, 'end': 230.0},
+            original_bounds={'start': 200.0, 'end': 230.0})
+
+        items = [i for i in _enumerate_inbox_items(temp_db) if i['episodeId'] == 'e7']
+        assert len(items) == 1
+        assert items[0]['status'] == 'confirmed'
