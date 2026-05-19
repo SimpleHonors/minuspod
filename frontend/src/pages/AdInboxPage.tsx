@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getAdInbox,
@@ -158,6 +158,11 @@ function AdInboxPage() {
   // of the pending list — using the item itself + a `key` prop on the
   // modal guarantees a clean remount per item with fresh state.
   const [activeItem, setActiveItem] = useState<InboxItem | null>(null);
+  // When Save-and-Next runs against the last visible row, we close the
+  // modal but flip this flag so the next refetch will auto-open the new
+  // first item. Handles the "ran out on current page / current filter"
+  // case without trying to predict the next item at click-time.
+  const [autoAdvance, setAutoAdvance] = useState(false);
   // Session-only skip set: keeps the user from being bounced back to
   // ads they explicitly skipped during this triage pass. Cleared on
   // page reload, so DB stays the source of truth.
@@ -216,20 +221,43 @@ function AdInboxPage() {
   const handleSaveAndNext = () => {
     if (!activeItem) {
       queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-pending-count'] });
       return;
     }
-    // Pick the next item from the *current* list (the actioned item is
-    // still in here until the refetch completes), then trigger refetch.
+    // Try to advance to the next item in the *current* list immediately
+    // (snappy UX -- the actioned item is still rendered as we wait for
+    // refetch). If we're already at the end of the visible list, fall
+    // back to the autoAdvance flag and let the post-refetch effect pick
+    // items[0]. That handles last-on-page, last-after-filter, and any
+    // contained-ads-just-became-hidden case in one path.
     const idx = items.findIndex(
       (i) =>
         i.podcastSlug === activeItem.podcastSlug &&
         i.episodeId === activeItem.episodeId &&
         i.adIndex === activeItem.adIndex,
     );
-    const next = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
-    setActiveItem(next);
+    const nextInPage = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
+    if (nextInPage) {
+      setActiveItem(nextInPage);
+    } else {
+      setActiveItem(null);
+      setAutoAdvance(true);
+    }
     queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
+    queryClient.invalidateQueries({ queryKey: ['inbox-pending-count'] });
   };
+
+  // Post-refetch auto-advance. Fires once after a Save-and-Next exhausts
+  // the current page; if the refetched items list still has work in it,
+  // open items[0]. The activeItem null check keeps us from clobbering a
+  // manual modal-open that happens between refetch start and end.
+  useEffect(() => {
+    if (!autoAdvance) return;
+    if (activeItem) return;
+    if (items.length === 0) return;
+    setActiveItem(items[0]);
+    setAutoAdvance(false);
+  }, [autoAdvance, activeItem, items]);
 
   const handleSkip = () => {
     if (!activeItem) return;
@@ -598,6 +626,47 @@ function AdInboxPage() {
               status: p.status,
             }))
           }
+          onJumpToPeer={(peerAdIndex) => {
+            // Synthesize a full InboxItem for the peer using the current
+            // item's episode-level metadata (podcast slug/title, episode
+            // title, originalDuration, etc.) and the peer's ad-level
+            // fields. This works even when the peer's status isn't
+            // currently loaded in the list (e.g. peer is 'confirmed'
+            // while we're viewing the Pending tab) -- we already have
+            // everything the modal needs.
+            const peer = activeItem.episodePeers?.find((p) => p.adIndex === peerAdIndex);
+            if (!peer) return;
+            // Peers for the NEW active item = all the current item's
+            // peers (sans the one we're jumping to) PLUS the current
+            // item itself (now a peer to the new active item).
+            const newPeers = (activeItem.episodePeers ?? [])
+              .filter((p) => p.adIndex !== peerAdIndex)
+              .concat([{
+                adIndex: activeItem.adIndex,
+                start: activeItem.start,
+                end: activeItem.end,
+                sponsor: activeItem.sponsor,
+                status: activeItem.status,
+              }]);
+            const synthesized: InboxItem = {
+              ...activeItem,
+              adIndex: peer.adIndex,
+              start: peer.start,
+              end: peer.end,
+              duration: Math.max(0, peer.end - peer.start),
+              sponsor: peer.sponsor,
+              status: peer.status,
+              // Detection-pass metadata isn't shipped with peers; safe
+              // defaults so the modal renders without surprises.
+              reason: null,
+              confidence: null,
+              detectionStage: null,
+              patternId: null,
+              correctedBounds: null,
+              episodePeers: newPeers,
+            };
+            setActiveItem(synthesized);
+          }}
           onClose={closeModal}
           onSubmit={async (s) => {
             await applySubmission(activeItem, s);

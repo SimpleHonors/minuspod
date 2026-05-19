@@ -88,9 +88,13 @@ interface Props {
   // status. Used to render passive overlay markers across the top of
   // the waveform so the user can see at a glance which sections have
   // already been triaged (confirmed/adjusted/rejected) vs. which are
-  // sibling pending detections. Markers are passive: clicking does
-  // nothing -- they're just visual context.
+  // sibling pending detections.
   peerAds?: PeerAdMarker[];
+  // Optional jump-to-peer callback. When provided, peer markers show
+  // a hover popover with an Edit button that swaps the active item to
+  // the peer. Omitted = passive markers (current per-episode AdEditor
+  // doesn't need this; only the Ad Inbox does).
+  onJumpToPeer?: (peerAdIndex: number) => void;
 }
 
 // Slim shape used purely for waveform overlay rendering. Keep
@@ -148,7 +152,7 @@ function AdReviewModal({
   audioMode = 'original', onAudioModeChange, hasOriginal = true,
   processedAudioUrl, episodeDuration,
   mode = 'review', onCreate, onAddNew,
-  peerAds,
+  peerAds, onJumpToPeer,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
@@ -1076,6 +1080,38 @@ function AdReviewModal({
             ) : !peaks ? (
               <p className="text-sm text-muted-foreground">Loading waveform…</p>
             ) : (
+              <>
+              {/* Color legend for the peer markers above the waveform.
+                  Only includes status colors actually present in
+                  peerAds so the legend collapses gracefully when the
+                  episode has e.g. only confirmed peers. */}
+              {peerAds && peerAds.length > 0 && (() => {
+                const present = new Set(peerAds.map((p) => p.status));
+                const entries = ([
+                  { status: 'confirmed' as const, label: 'Confirmed', glyph: '✓' },
+                  { status: 'adjusted' as const, label: 'Adjusted', glyph: '✎' },
+                  { status: 'rejected' as const, label: 'Rejected', glyph: '✗' },
+                  { status: 'pending' as const, label: 'Pending sibling', glyph: '·' },
+                ]).filter((e) => present.has(e.status));
+                if (entries.length === 0) return null;
+                return (
+                  <div className="mb-1 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-muted-foreground">
+                    <span className="font-medium">Other ads on this episode:</span>
+                    {entries.map((e) => (
+                      <span key={e.status} className="inline-flex items-center gap-1.5">
+                        <span
+                          className={`inline-block w-3 h-3 border-t border-b rounded-[1px] ${PEER_BAR_CLASS[e.status]}`}
+                          aria-hidden
+                        />
+                        <span>
+                          <span className="opacity-70 mr-0.5">{e.glyph}</span>
+                          {e.label}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
               <div
                 ref={scrollContainerRef}
                 onWheel={onWheel}
@@ -1094,7 +1130,7 @@ function AdReviewModal({
                     if (winDur <= 0) return null;
                     return (
                       <div
-                        className="absolute top-0 inset-x-0 h-3 z-[1] pointer-events-none"
+                        className="absolute top-0 inset-x-0 h-3 pointer-events-none"
                         aria-hidden
                       >
                         {peerAds.map((peer) => {
@@ -1111,15 +1147,53 @@ function AdReviewModal({
                           return (
                             <div
                               key={peer.adIndex}
-                              className={`absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-hidden pointer-events-auto`}
+                              className={`group/peer absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-visible pointer-events-auto`}
                               style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                              title={`${label} · ${peer.status} · ${formatTime(peer.start)}–${formatTime(peer.end)}`}
                             >
                               {widthPct > 6 && (
-                                <span className={`text-[9px] font-bold leading-3 px-1 truncate ${PEER_LABEL_CLASS[peer.status]}`}>
+                                <span className={`text-[9px] font-bold leading-3 px-1 truncate inline-block w-full ${PEER_LABEL_CLASS[peer.status]}`}>
                                   {statusGlyph} {label}
                                 </span>
                               )}
+                              {/* Hover popover. Sits below the strip,
+                                  anchored to the strip's left edge.
+                                  group-hover keeps it visible when the
+                                  cursor moves into the popover so the
+                                  Edit button stays clickable. z-30
+                                  beats the cursor (z-20) and pinheads
+                                  (z-10). */}
+                              <div
+                                className="opacity-0 pointer-events-none group-hover/peer:opacity-100 group-hover/peer:pointer-events-auto transition-opacity duration-100 absolute left-0 top-3 mt-1 z-30 w-56 rounded-md border border-border bg-card shadow-2xl text-xs"
+                                role="tooltip"
+                              >
+                                <div className="px-3 py-2 border-b border-border">
+                                  <div className="font-semibold text-foreground truncate">
+                                    {label}
+                                  </div>
+                                  <div className="mt-1 flex items-center gap-2">
+                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase ${PEER_LABEL_CLASS[peer.status]}`}>
+                                      {statusGlyph} {peer.status}
+                                    </span>
+                                    <span className="text-muted-foreground tabular-nums">
+                                      {formatTime(peer.start)}–{formatTime(peer.end)}
+                                    </span>
+                                  </div>
+                                </div>
+                                {onJumpToPeer && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      onJumpToPeer(peer.adIndex);
+                                    }}
+                                    className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between gap-2 text-primary font-medium"
+                                  >
+                                    <span>Edit this ad →</span>
+                                    <span className="text-[10px] text-muted-foreground font-normal">jumps to its review modal</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -1215,6 +1289,7 @@ function AdReviewModal({
                   <div ref={containerRef} className="w-full" />
                 </div>
               </div>
+              </>
             )}
           </div>
 
