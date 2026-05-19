@@ -1,0 +1,30 @@
+# Slim overlay build: reuse the 2.4.7 image's Python venv + system deps,
+# only rebuild the frontend and overlay our new source. Avoids ~5GB of
+# torch/CUDA reinstall when disk is tight.
+
+FROM node:26-alpine@sha256:e71ac5e964b9201072425d59d2e876359efa25dc96bb1768cb73295728d6e4ea AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* frontend/.npmrc ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+RUN mkdir -p /app/static/ui/swagger \
+    && (cp /app/frontend/node_modules/swagger-ui-dist/swagger-ui.css /app/static/ui/swagger/ 2>/dev/null || true) \
+    && (cp /app/frontend/node_modules/swagger-ui-dist/swagger-ui-bundle.js /app/static/ui/swagger/ 2>/dev/null || true) \
+    && (cp /app/frontend/node_modules/swagger-ui-dist/swagger-ui-standalone-preset.js /app/static/ui/swagger/ 2>/dev/null || true)
+
+FROM minuspod:2.4.7-normalize-combined-20260515
+
+WORKDIR /app
+COPY src/ ./src/
+COPY version.py ./
+COPY assets/ ./assets/
+COPY assets/ ./assets_builtin/
+COPY openapi.yaml ./
+COPY gunicorn.conf.py ./
+COPY entrypoint.sh /app/
+COPY --from=frontend-builder /app/static/ui ./static/ui/
+
+RUN find ./src -type f -name '*.py' -exec chmod 644 {} \; && \
+    chmod 755 /app/entrypoint.sh
