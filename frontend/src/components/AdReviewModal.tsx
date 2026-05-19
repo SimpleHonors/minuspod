@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Play, Pause, SkipBack, SkipForward, Rewind, FastForward, Square,
@@ -216,6 +217,24 @@ function AdReviewModal({
   const [endInput, setEndInput] = useState(() => formatTime(defaults.adEnd));
 
   const [isPlaying, setIsPlaying] = useState(false);
+  // Peer marker hover state. We render the popover via a portal to
+  // document.body to escape the modal body's overflow-y-auto and the
+  // waveform scroll container's overflow-x-auto -- both clip any inline
+  // popover. peerHover holds the active peer + the trigger's bounding
+  // rect captured on mouseenter; clears on mouseleave (with a brief
+  // grace period so the cursor can move into the popover itself).
+  const [peerHover, setPeerHover] = useState<{ peer: PeerAdMarker; rect: DOMRect } | null>(null);
+  const peerHoverLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearPeerHover = () => {
+    if (peerHoverLeaveTimer.current) clearTimeout(peerHoverLeaveTimer.current);
+    peerHoverLeaveTimer.current = setTimeout(() => setPeerHover(null), 120);
+  };
+  const cancelPeerHoverClear = () => {
+    if (peerHoverLeaveTimer.current) {
+      clearTimeout(peerHoverLeaveTimer.current);
+      peerHoverLeaveTimer.current = null;
+    }
+  };
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   // Zoom is a multiplier of "fit" -- 1 = fit-to-container, 2 = 2× zoomed in, etc.
@@ -896,6 +915,7 @@ function AdReviewModal({
   // ------------------------------------------------------------------
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-4"
       onMouseDown={(e) => {
@@ -1147,53 +1167,22 @@ function AdReviewModal({
                           return (
                             <div
                               key={peer.adIndex}
-                              className={`group/peer absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-visible pointer-events-auto`}
+                              className={`absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-hidden pointer-events-auto cursor-help`}
                               style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              onMouseEnter={(e) => {
+                                cancelPeerHoverClear();
+                                setPeerHover({
+                                  peer,
+                                  rect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                                });
+                              }}
+                              onMouseLeave={clearPeerHover}
                             >
                               {widthPct > 6 && (
                                 <span className={`text-[9px] font-bold leading-3 px-1 truncate inline-block w-full ${PEER_LABEL_CLASS[peer.status]}`}>
                                   {statusGlyph} {label}
                                 </span>
                               )}
-                              {/* Hover popover. Sits below the strip,
-                                  anchored to the strip's left edge.
-                                  group-hover keeps it visible when the
-                                  cursor moves into the popover so the
-                                  Edit button stays clickable. z-30
-                                  beats the cursor (z-20) and pinheads
-                                  (z-10). */}
-                              <div
-                                className="opacity-0 pointer-events-none group-hover/peer:opacity-100 group-hover/peer:pointer-events-auto transition-opacity duration-100 absolute left-0 top-3 mt-1 z-30 w-56 rounded-md border border-border bg-card shadow-2xl text-xs"
-                                role="tooltip"
-                              >
-                                <div className="px-3 py-2 border-b border-border">
-                                  <div className="font-semibold text-foreground truncate">
-                                    {label}
-                                  </div>
-                                  <div className="mt-1 flex items-center gap-2">
-                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase ${PEER_LABEL_CLASS[peer.status]}`}>
-                                      {statusGlyph} {peer.status}
-                                    </span>
-                                    <span className="text-muted-foreground tabular-nums">
-                                      {formatTime(peer.start)}–{formatTime(peer.end)}
-                                    </span>
-                                  </div>
-                                </div>
-                                {onJumpToPeer && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      onJumpToPeer(peer.adIndex);
-                                    }}
-                                    className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between gap-2 text-primary font-medium"
-                                  >
-                                    <span>Edit this ad →</span>
-                                    <span className="text-[10px] text-muted-foreground font-normal">jumps to its review modal</span>
-                                  </button>
-                                )}
-                              </div>
                             </div>
                           );
                         })}
@@ -1690,6 +1679,72 @@ function AdReviewModal({
         </div>
       </div>
     </div>
+    {/* Portal-rendered peer popover. Mounted on document.body so no
+        ancestor's overflow can clip it. Positioned in viewport coords
+        from the trigger marker's bounding rect captured on hover. */}
+    {peerHover && createPortal(
+      (() => {
+        const { peer, rect } = peerHover;
+        const label = peer.sponsor || 'unknown';
+        const statusGlyph =
+          peer.status === 'confirmed' ? '✓' :
+          peer.status === 'adjusted' ? '✎' :
+          peer.status === 'rejected' ? '✗' : '·';
+        // Anchor below the marker, left-aligned with it. Clamp left so
+        // the 224px popover doesn't fall off the viewport's right edge.
+        const POPOVER_W = 224;
+        const left = Math.min(
+          rect.left,
+          (typeof window !== 'undefined' ? window.innerWidth : 1024) - POPOVER_W - 8,
+        );
+        return (
+          <div
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: `${Math.max(8, left)}px`,
+              top: `${rect.bottom + 6}px`,
+              width: `${POPOVER_W}px`,
+              zIndex: 9999,
+            }}
+            className="rounded-md border border-border bg-card shadow-2xl text-xs"
+            onMouseEnter={cancelPeerHoverClear}
+            onMouseLeave={clearPeerHover}
+          >
+            <div className="px-3 py-2 border-b border-border">
+              <div className="font-semibold text-foreground truncate">
+                {label}
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase ${PEER_LABEL_CLASS[peer.status]}`}>
+                  {statusGlyph} {peer.status}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatTime(peer.start)}–{formatTime(peer.end)}
+                </span>
+              </div>
+            </div>
+            {onJumpToPeer && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPeerHover(null);
+                  onJumpToPeer(peer.adIndex);
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between gap-2 text-primary font-medium"
+              >
+                <span>Edit this ad →</span>
+                <span className="text-[10px] text-muted-foreground font-normal">jumps to its review modal</span>
+              </button>
+            )}
+          </div>
+        );
+      })(),
+      document.body,
+    )}
+    </>
   );
 }
 
