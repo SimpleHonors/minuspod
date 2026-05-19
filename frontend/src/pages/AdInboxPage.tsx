@@ -89,6 +89,13 @@ async function applySubmission(item: InboxItem, s: AdReviewSubmit): Promise<void
 }
 
 const PAGE_SIZE = 50;
+// Max parallel POSTs when applying a bulk action. Five strikes a
+// balance: a 50-item confirm finishes in ~500ms instead of 2.5s,
+// without overwhelming gunicorn's worker pool while it's also
+// servicing the queue processor's writes.
+const BULK_CONCURRENCY = 5;
+
+type BulkAction = 'confirm' | 'reject' | 'skip';
 
 function AdInboxPage() {
   const queryClient = useQueryClient();
@@ -98,15 +105,22 @@ function AdInboxPage() {
   // status tab changes so the user doesn't end up on (status=adjusted,
   // podcast=X) and see zero results because X has no adjusted ads.
   const [podcastSlug, setPodcastSlug] = useState<string | null>(null);
-  // Reset to page 0 whenever the status filter changes.
+  // Reset to page 0 whenever the status filter changes. Also clears
+  // bulk selection so we never carry stale row IDs across views.
   const setStatusAndResetPage = (s: InboxStatusFilter) => {
     setStatus(s);
     setPage(0);
     setPodcastSlug(null);
+    setSelected(new Set());
   };
   const setPodcastAndResetPage = (slug: string | null) => {
     setPodcastSlug(slug);
     setPage(0);
+    setSelected(new Set());
+  };
+  const setPageAndResetSelection = (p: number) => {
+    setPage(p);
+    setSelected(new Set());
   };
   // Track the active item by identity (not index). Index-based tracking
   // gets out of sync after refetch when the just-actioned item drops out
@@ -118,6 +132,12 @@ function AdInboxPage() {
   // page reload, so DB stays the source of truth.
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [showSkipped, setShowSkipped] = useState(false);
+  // Bulk-action selection state. Keyed by itemKey() for stability across
+  // refetches. Cleared whenever the visible item set changes underneath
+  // (status tab, podcast filter, page) so stale selections don't carry.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingBulk, setPendingBulk] = useState<BulkAction | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ad-inbox', status, page, podcastSlug],
@@ -171,6 +191,82 @@ function AdInboxPage() {
     );
     const next = idx >= 0 && idx + 1 < items.length ? items[idx + 1] : null;
     setActiveItem(next);
+  };
+
+  // ----- Bulk-action helpers ----------------------------------------
+
+  const toggleSelected = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Select-all-visible toggle: when ANY visible row is unselected, this
+  // selects all of them; otherwise it clears the selection. Matches the
+  // common tri-state-header inbox pattern (Gmail/GitHub/etc.).
+  const visibleKeys = items.map(itemKey);
+  const allVisibleSelected = visibleKeys.length > 0
+    && visibleKeys.every((k) => selected.has(k));
+  const toggleSelectAllVisible = () => {
+    setSelected((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        for (const k of visibleKeys) next.delete(k);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const k of visibleKeys) next.add(k);
+      return next;
+    });
+  };
+
+  const selectedItems = items.filter((it) => selected.has(itemKey(it)));
+
+  // Apply the chosen bulk action with bounded concurrency. confirm/reject
+  // POST per item; skip just adds to the session skip set (no API call).
+  const applyBulk = async (action: BulkAction) => {
+    if (selectedItems.length === 0) return;
+
+    if (action === 'skip') {
+      setSkipped((s) => {
+        const next = new Set(s);
+        for (const it of selectedItems) next.add(itemKey(it));
+        return next;
+      });
+      setSelected(new Set());
+      return;
+    }
+
+    const submit: AdReviewSubmit =
+      action === 'confirm' ? { kind: 'confirm' } : { kind: 'reject' };
+
+    setBulkProgress({ done: 0, total: selectedItems.length });
+    let done = 0;
+    const queue = [...selectedItems];
+    const workers = Array.from({ length: BULK_CONCURRENCY }, async () => {
+      while (queue.length) {
+        const it = queue.shift();
+        if (!it) break;
+        try {
+          await applySubmission(it, submit);
+        } catch (e) {
+          // Don't abort the batch on a single failure; surface it via
+          // the dev console for now. A toast/error-list would be a
+          // worthwhile follow-up if you start seeing partial-failures.
+          console.error('bulk action failed for', itemKey(it), e);
+        }
+        done += 1;
+        setBulkProgress({ done, total: selectedItems.length });
+      }
+    });
+    await Promise.all(workers);
+    setBulkProgress(null);
+    setSelected(new Set());
+    queryClient.invalidateQueries({ queryKey: ['ad-inbox'] });
+    queryClient.invalidateQueries({ queryKey: ['inbox-pending-count'] });
   };
 
   return (
@@ -285,6 +381,15 @@ function AdInboxPage() {
           <table className="w-full text-sm">
             <thead className="bg-secondary/50 text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
+                <th className="text-left px-3 py-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    aria-label="Select all visible"
+                    className="cursor-pointer"
+                  />
+                </th>
                 <th className="text-left px-4 py-2">Podcast / Episode</th>
                 <th className="text-left px-4 py-2">Sponsor</th>
                 <th className="text-left px-4 py-2">When</th>
@@ -295,12 +400,29 @@ function AdInboxPage() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
+              {items.map((it) => {
+                const key = `${it.podcastSlug}:${it.episodeId}:${it.adIndex}`;
+                const isSelected = selected.has(key);
+                return (
                 <tr
-                  key={`${it.podcastSlug}:${it.episodeId}:${it.adIndex}`}
+                  key={key}
                   onClick={() => setActiveItem(it)}
-                  className="border-t border-border cursor-pointer hover:bg-accent transition-colors"
+                  className={`border-t border-border cursor-pointer transition-colors ${
+                    isSelected ? 'bg-accent/60' : 'hover:bg-accent'
+                  }`}
                 >
+                  <td
+                    className="px-3 py-2 w-8"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelected(key)}
+                      aria-label={`Select ${it.episodeTitle ?? it.episodeId}`}
+                      className="cursor-pointer"
+                    />
+                  </td>
                   <td className="px-4 py-2">
                     <div className="font-medium text-foreground truncate max-w-md">
                       {it.podcastTitle}
@@ -326,7 +448,8 @@ function AdInboxPage() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -343,7 +466,7 @@ function AdInboxPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              onClick={() => setPageAndResetSelection(Math.max(0, page - 1))}
               disabled={page === 0}
               className="px-3 py-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
@@ -354,7 +477,7 @@ function AdInboxPage() {
             </span>
             <button
               type="button"
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setPageAndResetSelection(page + 1)}
               disabled={(page + 1) * PAGE_SIZE >= data.total}
               className="px-3 py-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
@@ -377,6 +500,110 @@ function AdInboxPage() {
           onSkip={handleSkip}
           hasNext={items.length > 1}
         />
+      )}
+
+      {/* Sticky bulk-action bar: pinned to bottom of viewport when any
+          item is selected. Disappears as soon as selection is empty. */}
+      {selected.size > 0 && (
+        <div
+          className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-card shadow-2xl"
+          role="region"
+          aria-label="Bulk actions"
+        >
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+            <div className="text-sm">
+              <span className="font-medium text-foreground">{selected.size}</span>
+              <span className="text-muted-foreground"> selected</span>
+              {bulkProgress && (
+                <span className="ml-3 text-xs text-muted-foreground">
+                  Applying… {bulkProgress.done} / {bulkProgress.total}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                disabled={!!bulkProgress}
+                className="px-3 py-1.5 rounded-lg border border-border bg-card text-foreground hover:bg-accent disabled:opacity-40 transition-colors text-sm"
+              >
+                Deselect
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingBulk('skip')}
+                disabled={!!bulkProgress}
+                className="px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 disabled:opacity-40 transition-colors text-sm"
+              >
+                Skip {selected.size}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingBulk('reject')}
+                disabled={!!bulkProgress}
+                className="px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20 disabled:opacity-40 transition-colors text-sm"
+              >
+                Reject {selected.size}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingBulk('confirm')}
+                disabled={!!bulkProgress}
+                className="px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 disabled:opacity-40 transition-colors text-sm font-medium"
+              >
+                Confirm {selected.size}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation dialog. Blocks misfires from a missed click on
+          the action bar. */}
+      {pendingBulk && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm bulk action"
+          onClick={() => setPendingBulk(null)}
+        >
+          <div
+            className="bg-card border border-border rounded-lg shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-foreground mb-2">
+              Apply <span className="font-bold">{pendingBulk}</span> to {selected.size} {selected.size === 1 ? 'item' : 'items'}?
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {pendingBulk === 'confirm' && 'Each ad will be marked as a confirmed correction, adding it to the pattern matcher.'}
+              {pendingBulk === 'reject' && 'Each ad will be marked as a false positive. The pattern matcher will learn to avoid similar boundaries.'}
+              {pendingBulk === 'skip' && 'Items will be hidden from this session only (no DB write). Reload to see them again.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingBulk(null)}
+                className="px-4 py-2 rounded-lg border border-border bg-card text-foreground hover:bg-accent transition-colors text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const action = pendingBulk;
+                  setPendingBulk(null);
+                  await applyBulk(action);
+                }}
+                className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity text-sm font-medium"
+              >
+                {pendingBulk === 'confirm' && 'Confirm all'}
+                {pendingBulk === 'reject' && 'Reject all'}
+                {pendingBulk === 'skip' && 'Skip all'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
