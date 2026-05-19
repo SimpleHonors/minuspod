@@ -80,8 +80,16 @@ export interface AdSegment {
   confidence: number;
   reason?: string;
   sponsor?: string;
-  detection_stage?: 'first_pass' | 'claude' | 'fingerprint' | 'text_pattern' | 'language' | 'verification';
+  detection_stage?: 'first_pass' | 'claude' | 'fingerprint' | 'text_pattern' | 'language' | 'verification' | 'manual';
   validation?: AdValidation;
+  // Ad reviewer (issue #197) -- populated only when the reviewer ran on this ad.
+  reviewer_verdict?: 'confirmed' | 'adjust' | 'reject' | 'resurrect' | 'failure';
+  reviewer_original_start?: number;
+  reviewer_original_end?: number;
+  reviewer_reasoning?: string;
+  reviewer_confidence?: number;
+  reviewer_model?: string;
+  source?: 'reviewer' | 'validator';
 }
 
 export interface SettingValue {
@@ -122,6 +130,11 @@ export const WHISPER_BACKENDS = {
 export interface Settings {
   systemPrompt: SettingValue;
   verificationPrompt: SettingValue;
+  reviewPrompt: SettingValue;
+  resurrectPrompt: SettingValue;
+  enableAdReview: SettingValueBoolean;
+  reviewModel: SettingValue;
+  reviewMaxBoundaryShift: SettingValueNumber;
   claudeModel: SettingValue;
   verificationModel: SettingValue;
   whisperModel: SettingValue;
@@ -150,9 +163,16 @@ export interface Settings {
   podcastIndexApiKeyConfigured: boolean;
   openrouterBaseUrl: string;
   retentionDays: number;
+  stageTunables: StageTunables;
+  stageTunableDefaults: Record<keyof StageTunables, number | string | null>;
   defaults: {
     systemPrompt: string;
     verificationPrompt: string;
+    reviewPrompt: string;
+    resurrectPrompt: string;
+    enableAdReview: boolean;
+    reviewModel: string;
+    reviewMaxBoundaryShift: number;
     claudeModel: string;
     verificationModel: string;
     whisperModel: string;
@@ -183,6 +203,11 @@ export interface Settings {
 export interface UpdateSettingsPayload {
   systemPrompt?: string;
   verificationPrompt?: string;
+  reviewPrompt?: string;
+  resurrectPrompt?: string;
+  enableAdReview?: boolean;
+  reviewModel?: string;
+  reviewMaxBoundaryShift?: number;
   claudeModel?: string;
   verificationModel?: string;
   whisperModel?: string;
@@ -210,6 +235,64 @@ export interface UpdateSettingsPayload {
   audioNormalizeIntensity?: string;
   podcastIndexApiKey?: string;
   podcastIndexApiSecret?: string;
+  // Per-stage LLM tunables. Null clears the stored value (returns to default).
+  detectionTemperature?: number | null;
+  detectionMaxTokens?: number | null;
+  detectionReasoningBudget?: number | null;
+  detectionReasoningLevel?: ReasoningLevel | null;
+  verificationTemperature?: number | null;
+  verificationMaxTokens?: number | null;
+  verificationReasoningBudget?: number | null;
+  verificationReasoningLevel?: ReasoningLevel | null;
+  reviewerTemperature?: number | null;
+  reviewerMaxTokens?: number | null;
+  reviewerReasoningBudget?: number | null;
+  reviewerReasoningLevel?: ReasoningLevel | null;
+  chapterBoundaryTemperature?: number | null;
+  chapterBoundaryMaxTokens?: number | null;
+  chapterBoundaryReasoningBudget?: number | null;
+  chapterBoundaryReasoningLevel?: ReasoningLevel | null;
+  chapterTitleTemperature?: number | null;
+  chapterTitleMaxTokens?: number | null;
+  chapterTitleReasoningBudget?: number | null;
+  chapterTitleReasoningLevel?: ReasoningLevel | null;
+  ollamaNumCtx?: number | null;
+  windowSizeSeconds?: number | null;
+  windowOverlapSeconds?: number | null;
+}
+
+export type ReasoningLevel = 'none' | 'low' | 'medium' | 'high';
+
+export interface StageTunableEntry<T = number | string | null> {
+  value: T;
+  isDefault: boolean;
+  envOverride: string | null;
+}
+
+export interface StageTunables {
+  detectionTemperature: StageTunableEntry<number | null>;
+  detectionMaxTokens: StageTunableEntry<number | null>;
+  detectionReasoningBudget: StageTunableEntry<number | null>;
+  detectionReasoningLevel: StageTunableEntry<ReasoningLevel | null>;
+  verificationTemperature: StageTunableEntry<number | null>;
+  verificationMaxTokens: StageTunableEntry<number | null>;
+  verificationReasoningBudget: StageTunableEntry<number | null>;
+  verificationReasoningLevel: StageTunableEntry<ReasoningLevel | null>;
+  reviewerTemperature: StageTunableEntry<number | null>;
+  reviewerMaxTokens: StageTunableEntry<number | null>;
+  reviewerReasoningBudget: StageTunableEntry<number | null>;
+  reviewerReasoningLevel: StageTunableEntry<ReasoningLevel | null>;
+  chapterBoundaryTemperature: StageTunableEntry<number | null>;
+  chapterBoundaryMaxTokens: StageTunableEntry<number | null>;
+  chapterBoundaryReasoningBudget: StageTunableEntry<number | null>;
+  chapterBoundaryReasoningLevel: StageTunableEntry<ReasoningLevel | null>;
+  chapterTitleTemperature: StageTunableEntry<number | null>;
+  chapterTitleMaxTokens: StageTunableEntry<number | null>;
+  chapterTitleReasoningBudget: StageTunableEntry<number | null>;
+  chapterTitleReasoningLevel: StageTunableEntry<ReasoningLevel | null>;
+  ollamaNumCtx: StageTunableEntry<number | null>;
+  windowSizeSeconds: StageTunableEntry<number | null>;
+  windowOverlapSeconds: StageTunableEntry<number | null>;
 }
 
 export interface ClaudeModel {
@@ -406,4 +489,21 @@ export interface PodcastStats {
   totalInputTokens: number;
   totalOutputTokens: number;
   avgTokensPerEpisode: number;
+}
+
+// Ad reviewer stats (issue #197). Empty (zero counts) when reviewer hasn't run.
+export interface ReviewerStats {
+  totalReviews: number;
+  verdictCounts: {
+    confirmed: number;
+    adjust: number;
+    reject: number;
+    resurrect: number;
+    failure: number;
+  };
+  pass1AdjustmentCount: number;
+  pass2AdjustmentCount: number;
+  avgBoundaryShiftSeconds: number;
+  resurrectionCount: number;
+  failureCount: number;
 }

@@ -60,6 +60,27 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+// Turn whatever the backend returned in its error body into a usable string,
+// so `new Error(...).message` never ends up as "[object Object]". Backend
+// 4xx bodies vary: sometimes `{error: 'string'}`, sometimes
+// `{error: {message: 'x', reasons: [...]}}` (e.g. submit-to-community 400).
+export function extractErrorMessage(body: unknown, status: number): string {
+  if (body && typeof body === 'object') {
+    const err = (body as { error?: unknown }).error;
+    if (typeof err === 'string' && err) return err;
+    if (err && typeof err === 'object') {
+      const msg = (err as { message?: unknown }).message;
+      if (typeof msg === 'string' && msg) return msg;
+      try {
+        return JSON.stringify(err);
+      } catch {
+        // fall through to status code
+      }
+    }
+  }
+  return `HTTP ${status}`;
+}
+
 export async function apiRequest<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, skipAuthRedirect = false, signal, skipRetry = false } = options;
   const maxAttempts = skipRetry ? 1 : RETRY_DELAYS.length + 1;
@@ -96,7 +117,7 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
           continue;
         }
         const error = await response.json().catch(() => ({ error: 'Request failed' }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(extractErrorMessage(error, response.status));
       }
 
       const contentType = response.headers.get('content-type');
@@ -120,4 +141,56 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
 
   // Unreachable: the loop always throws on the final attempt. Required for TypeScript.
   throw new Error('Request failed after retries');
+}
+
+interface FileRequestOptions {
+  method?: 'GET' | 'POST';
+  body?: BodyInit | object;
+  fallbackFilename?: string;
+}
+
+// Shared blob-download helper. Endpoints that stream a file can't go through
+// apiRequest (which assumes JSON), but they still need the same CSRF header
+// path and error-stringification. Returns the blob plus the filename parsed
+// from Content-Disposition (or fallbackFilename if the header is missing).
+export async function apiFileRequest(
+  endpoint: string,
+  options: FileRequestOptions = {}
+): Promise<{ blob: Blob; filename: string }> {
+  const { method = 'GET', body, fallbackFilename = 'download' } = options;
+
+  const headers: Record<string, string> = {};
+  let serializedBody: BodyInit | undefined;
+  if (body !== undefined) {
+    if (
+      body instanceof FormData ||
+      body instanceof Blob ||
+      body instanceof ArrayBuffer ||
+      body instanceof URLSearchParams ||
+      typeof body === 'string'
+    ) {
+      serializedBody = body as BodyInit;
+    } else {
+      headers['Content-Type'] = 'application/json';
+      serializedBody = JSON.stringify(body);
+    }
+  }
+  Object.assign(headers, csrfHeaders(method));
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method,
+    headers,
+    body: serializedBody,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(extractErrorMessage(error, response.status));
+  }
+
+  const blob = await response.blob();
+  const cd = response.headers.get('Content-Disposition') || '';
+  const match = cd.match(/filename="?([^";]+)"?/);
+  const filename = match?.[1] || fallbackFilename;
+  return { blob, filename };
 }

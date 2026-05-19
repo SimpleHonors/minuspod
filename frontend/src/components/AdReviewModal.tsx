@@ -1,25 +1,90 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
 import {
+  AlertCircle,
   Play, Pause, SkipBack, SkipForward, Rewind, FastForward, Square,
   ZoomIn, ZoomOut,
 } from 'lucide-react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
-import type { InboxItem } from '../api/adInbox';
-import { getEpisodePeaks } from '../api/adInbox';
-import { submitCorrection } from '../api/patterns';
+import { getTranscriptSpan } from '../api/feeds';
+import { getSponsors } from '../api/sponsors';
+import { SponsorInput, type SponsorOption } from './ad-editor/SponsorInput';
+import { Pin } from './ad-editor/Pin';
+import { usePeaks } from './ad-editor/usePeaks';
+import TextSelectionPanel from './ad-editor/TextSelectionPanel';
+import {
+  parseTimeInput,
+  formatTime,
+  getThemeWaveformColors,
+  loadPlayWhileDragging,
+  savePlayWhileDragging,
+} from '../utils/adReviewHelpers';
 
-interface Props {
-  item: InboxItem;
-  onClose: () => void;
-  onSaveAndNext: () => void;
-  // Advance without mutating the DB. Item stays in pending; UI filters it
-  // out of this session's queue so the user isn't bounced back to it.
-  onSkip: () => void;
+// Shape used by the per-episode AdEditor: enough to render the waveform
+// editor for a single detected ad and submit a correction back. Matches
+// what PR #204's inbox passed in, but renamed to reflect the per-episode
+// scope of v2.2.0.
+export interface AdReviewItem {
+  podcastSlug: string;
+  episodeId: string;
+  start: number;
+  end: number;
+  sponsor: string | null;
+  reason: string | null;
+  confidence: number | null;
+  detectionStage: string | null;
+  patternId: number | null;
+  correctedBounds: { start: number; end: number } | null;
 }
 
-const CONTEXT_SECONDS = 30;
+export interface AdReviewSubmit {
+  kind: 'confirm' | 'reject' | 'adjust';
+  adjustedStart?: number;
+  adjustedEnd?: number;
+  sponsor?: string;
+}
+
+export interface AdCreateSubmit {
+  kind: 'create';
+  start: number;
+  end: number;
+  sponsor: string;
+  textTemplate: string;
+  scope: 'podcast' | 'global';
+  reason: string;
+}
+
+interface Props {
+  item: AdReviewItem;
+  onClose: () => void;
+  // Called when the user confirms / rejects / adjusts. The host owns the
+  // queue (or single-item) lifecycle; this component just emits intent.
+  onSubmit: (s: AdReviewSubmit) => void;
+  // Skip = advance UI without mutating DB.
+  onSkip: () => void;
+  // Hides the "& Next" button text when there's no queue.
+  hasNext?: boolean;
+  // Audio mode: 'processed' plays the post-cut file, 'original' plays the
+  // retained pre-cut file. Original is forced in create mode (you can't
+  // mark a new ad on already-cut audio).
+  audioMode?: 'processed' | 'original';
+  onAudioModeChange?: (m: 'processed' | 'original') => void;
+  hasOriginal?: boolean;
+  processedAudioUrl?: string;
+  // Optional: total episode duration so create mode can default
+  // end-of-selection to the end of the file.
+  episodeDuration?: number;
+  // 'review' (default) is the existing flow. 'create' switches into
+  // net-new-ad mode against the original audio: empty boundaries,
+  // editable sponsor + text_template fields, and a different submit
+  // signature via onCreate.
+  mode?: 'review' | 'create';
+  onCreate?: (s: AdCreateSubmit) => void;
+  // Optional: surface a "+ Add new ad" entry inside the modal so the
+  // user can switch into create mode without closing the modal first.
+  onAddNew?: () => void;
+}
+
 // Cap the default visible window. Some heuristic detections (notably
 // post-roll) flag dozens of minutes as a single "ad", which would make
 // the default fit-zoom view useless (whole episode squeezed into one
@@ -27,170 +92,15 @@ const CONTEXT_SECONDS = 30;
 // always expand via the +1m buttons or wheel-zoom in.
 const DEFAULT_MAX_WINDOW_SECONDS = 360;
 const WINDOW_STEP_SECONDS = 60;
-// 100ms buckets — 4× fewer peaks than the prior 50ms default. Still plenty
-// of detail to see speech vs. silence at any reasonable zoom level, and
-// shaves the JSON payload + canvas-render cost on first mount roughly 4×.
-const PEAK_RESOLUTION_MS = 100;
-const MIN_WINDOW_PAD = 10;
+// Padding on each side of a detected ad's pins when the modal opens in
+// review mode. Small enough to show boundary detail; user can expand via
+// wheel-zoom, the +1m buttons, or by typing far-away timestamps.
+const CONTEXT_SECONDS = 30;
 const MIN_AD_DURATION = 1.0;
-const PLAY_WHILE_DRAG_KEY = 'minuspod.adInbox.playWhileDragging';
-
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds)) return '0:00';
-  const sign = seconds < 0 ? '-' : '';
-  const total = Math.abs(seconds);
-  const m = Math.floor(total / 60);
-  const s = total - m * 60;
-  return `${sign}${m}:${s.toFixed(1).padStart(4, '0')}`;
-}
-
-function loadPlayWhileDragging(): boolean {
-  try {
-    return localStorage.getItem(PLAY_WHILE_DRAG_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-function savePlayWhileDragging(v: boolean) {
-  try {
-    localStorage.setItem(PLAY_WHILE_DRAG_KEY, v ? '1' : '0');
-  } catch {
-    /* private mode etc */
-  }
-}
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 
 // ----------------------------------------------------------------------
-// Pin: vertical drag handle above the waveform that controls the
-// corresponding ad boundary. Pins ARE the user's drag interface — the
-// wavesurfer region is decorative (drag/resize disabled on it).
-
-interface PinProps {
-  kind: 'start' | 'end';
-  boundary: number;
-  windowStart: number;
-  windowDuration: number;
-  containerRef: React.RefObject<HTMLDivElement | null>;
-  onChange: (next: number) => void;
-  // Called while drag is in progress so we can scrub audio if enabled.
-  onDragMove?: (next: number) => void;
-  onDragStart?: () => void;
-  onDragEnd?: () => void;
-  otherBoundary: number;        // for min-separation clamp
-}
-
-function Pin({
-  kind, boundary, windowStart, windowDuration, containerRef,
-  onChange, onDragMove, onDragStart, onDragEnd, otherBoundary,
-}: PinProps) {
-  const [dragging, setDragging] = useState(false);
-
-  const relX = (boundary - windowStart) / windowDuration;
-  // Tolerate a tiny bit outside [0, 1] — happens routinely on post-roll ads
-  // where the LLM places adEnd a hair past where the audio file actually
-  // ends, which makes relX = 1.0001 or so. Without slop the END pin
-  // disappears entirely.
-  const visible = relX >= -0.02 && relX <= 1.02;
-  const leftPct = Math.max(0, Math.min(1, relX)) * 100;
-
-  const isStart = kind === 'start';
-  const color = isStart ? 'bg-emerald-500' : 'bg-rose-500';
-  const ringColor = isStart ? 'ring-emerald-500/40' : 'ring-rose-500/40';
-  const labelText = isStart ? 'START' : 'END';
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const container = containerRef.current;
-    if (!container) return;
-
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    setDragging(true);
-    onDragStart?.();
-
-    const rect = container.getBoundingClientRect();
-
-    const computeBoundary = (clientX: number): number => {
-      const xPct = (clientX - rect.left) / rect.width;
-      const clampedPct = Math.max(0, Math.min(1, xPct));
-      const t = windowStart + clampedPct * windowDuration;
-      // Min-separation: never let start cross end (and vice-versa).
-      if (isStart) return Math.min(t, otherBoundary - MIN_AD_DURATION);
-      return Math.max(t, otherBoundary + MIN_AD_DURATION);
-    };
-
-    const handleMove = (ev: PointerEvent) => {
-      const next = computeBoundary(ev.clientX);
-      onChange(next);
-      onDragMove?.(next);
-    };
-    const handleUp = (ev: PointerEvent) => {
-      const next = computeBoundary(ev.clientX);
-      onChange(next);
-      setDragging(false);
-      onDragEnd?.();
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
-      window.removeEventListener('pointercancel', handleUp);
-    };
-
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp);
-    window.addEventListener('pointercancel', handleUp);
-  };
-
-  if (!visible) return null;
-
-  // Compact pin: small colored circle pinhead, thin stem. The label
-  // (with time) only shows when the pin is being dragged or hovered —
-  // when idle, just the circle is visible. Negative top offsets are
-  // avoided so the pinhead doesn't get clipped by the parent's
-  // overflow-x scrollbox.
-
-  return (
-    <div
-      onPointerDown={onPointerDown}
-      style={{
-        left: `${leftPct}%`,
-        touchAction: 'none',
-      }}
-      className={`group absolute inset-y-0 -translate-x-1/2 z-10 cursor-ew-resize select-none ${
-        dragging ? 'cursor-grabbing' : ''
-      }`}
-      role="slider"
-      aria-label={`${labelText} pin · ${formatTime(boundary)}`}
-      aria-valuenow={Math.round(boundary * 10) / 10}
-    >
-      {/* Compact circle pinhead at top. */}
-      <div
-        className={`absolute top-1 left-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white ${color} shadow-md ${
-          dragging ? `ring-4 ${ringColor} scale-125` : ''
-        } transition-transform`}
-      />
-      {/* Time label — only visible while dragging or on hover. */}
-      <div
-        className={`absolute -top-5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded ${color} text-white text-[10px] font-bold tracking-wider whitespace-nowrap shadow-md transition-opacity duration-100 pointer-events-none ${
-          dragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-        }`}
-      >
-        {labelText} {formatTime(boundary)}
-      </div>
-      {/* Stem — runs from just below the circle to the bottom. */}
-      <div
-        className={`absolute top-[20px] bottom-0 left-1/2 -translate-x-1/2 w-0.5 ${color} ${
-          dragging ? 'opacity-100' : 'opacity-80'
-        }`}
-      />
-      {/* Touch target — wraps the whole pin column for easy mobile grab. */}
-      <div
-        className="absolute inset-y-0 -inset-x-4"
-        style={{ touchAction: 'none' }}
-      />
-    </div>
-  );
-}
-
-// ----------------------------------------------------------------------
-// Playhead cursor — ref-driven DOM updates from the RAF loop, NOT React
+// Playhead cursor -- ref-driven DOM updates from the RAF loop, NOT React
 // state, so position can update at full 60fps without re-rendering the
 // whole modal tree (which fights wavesurfer + the regions plugin).
 // Position is read from the parent component's RAF loop via the
@@ -198,47 +108,63 @@ function Pin({
 
 // ----------------------------------------------------------------------
 
-function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
+function AdReviewModal({
+  item, onClose, onSubmit, onSkip, hasNext = false,
+  audioMode = 'original', onAudioModeChange, hasOriginal = true,
+  processedAudioUrl, episodeDuration,
+  mode = 'review', onCreate, onAddNew,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
   const scrollContainerRef = useRef<HTMLDivElement>(null); // overflow-x-auto wrapper
   const cursorRef = useRef<HTMLDivElement>(null);      // playhead, position-updated from RAF
+  const scrubberRef = useRef<HTMLDivElement>(null);    // full-episode play scrubber
   const audioRef = useRef<HTMLAudioElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
   const adRegionRef = useRef<ReturnType<RegionsPlugin['addRegion']> | null>(null);
 
-  // Defaults derived from the original detection — used by Reset.
+  // Defaults derived from the original detection -- used by Reset.
+  // Create mode defaults to the entire episode so the user can pin any
+  // moment without zooming/scrolling. Review mode centers on the detected
+  // ad with a small context margin so boundary detail is visible at fit
+  // zoom; the user can still zoom out or expand by typing distant times.
   const defaults = useMemo(() => {
+    const fullDuration = Math.max(0, episodeDuration ?? 0);
+    const safeEnd = fullDuration > 0 ? fullDuration : DEFAULT_MAX_WINDOW_SECONDS;
+    if (mode === 'create') {
+      return {
+        windowStart: 0,
+        windowEnd: safeEnd,
+        adStart: 0,
+        adEnd: Math.min(60, safeEnd),
+      };
+    }
     const windowStart = Math.max(0, item.start - CONTEXT_SECONDS);
     const naturalEnd = item.end + CONTEXT_SECONDS;
     const cappedEnd = windowStart + DEFAULT_MAX_WINDOW_SECONDS;
     return {
       windowStart,
-      // Cap the visible default to DEFAULT_MAX_WINDOW_SECONDS so a heuristic
-      // post-roll that spans the rest of the episode doesn't render the
-      // whole thing at fit-zoom. User can still see further via +1m or by
-      // zooming.
-      windowEnd: Math.min(naturalEnd, cappedEnd),
+      windowEnd: Math.min(naturalEnd, cappedEnd, safeEnd),
       adStart: (item.correctedBounds ?? item).start,
       adEnd: (item.correctedBounds ?? item).end,
     };
-  }, [item.start, item.end, item.correctedBounds]);
+  }, [mode, episodeDuration, item]);
 
   const [windowStart, setWindowStart] = useState(defaults.windowStart);
   const [windowEnd, setWindowEnd] = useState(defaults.windowEnd);
   const [adStart, setAdStart] = useState(defaults.adStart);
   const [adEnd, setAdEnd] = useState(defaults.adEnd);
+  // String mirror of the timestamp inputs. Lets the user type partial
+  // values (`0:3`) without each keystroke being clobbered by a parent
+  // numeric update. Commits to adStart/adEnd on blur or Enter.
+  const [startInput, setStartInput] = useState(() => formatTime(defaults.adStart));
+  const [endInput, setEndInput] = useState(() => formatTime(defaults.adEnd));
 
-  const [peaks, setPeaks] = useState<number[] | null>(null);
-  // Resolution actually used by the server. May be coarser than requested
-  // when the window is very long (audio_peaks auto-scales to keep the
-  // payload bounded). Drives effective-duration math below.
-  const [peakResolutionMs, setPeakResolutionMs] = useState<number>(PEAK_RESOLUTION_MS);
-  const [peaksError, setPeaksError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  // Zoom is a multiplier of "fit" — 1 = fit-to-container, 2 = 2× zoomed in, etc.
+  const [playbackRate, setPlaybackRate] = useState(1);
+  // Zoom is a multiplier of "fit" -- 1 = fit-to-container, 2 = 2× zoomed in, etc.
   const [zoom, setZoom] = useState(1);
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 20;
@@ -246,6 +172,15 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   // of peaks). Belt-and-suspenders so Reset always lands a known-good
   // state regardless of which states actually changed.
   const [resetTick, setResetTick] = useState(0);
+  // Fetches peaks for the current window and exposes the resolution the
+  // server actually used. Re-fetches on window or resetTick change.
+  const { peaks, peakResolutionMs, peaksError } = usePeaks(
+    item.podcastSlug,
+    item.episodeId,
+    windowStart,
+    windowEnd,
+    resetTick,
+  );
   const [playWhileDrag, setPlayWhileDrag] = useState<boolean>(loadPlayWhileDragging);
   const wasPlayingBeforeDragRef = useRef(false);
   // Save the playhead position before a pin drag (with playWhileDrag) so
@@ -254,10 +189,46 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   const positionBeforePinDragRef = useRef<number | null>(null);
   const [sponsorInput, setSponsorInput] = useState(item.sponsor ?? '');
   const [showSponsorPrompt, setShowSponsorPrompt] = useState(!item.sponsor);
+  // Sponsor catalog, fetched once on mount, used by the SponsorInput
+  // combobox in create mode.
+  const [sponsorOptions, setSponsorOptions] = useState<SponsorOption[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getSponsors()
+      .then((list) => {
+        if (cancelled) return;
+        setSponsorOptions(
+          list.map((s: { id: number; name: string }) => ({ id: s.id, name: s.name }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // Create-mode only: a text template the user can edit before submit.
+  // Left empty here so the host can wire a transcript-span fetch into it.
+  const [textTemplateInput, setTextTemplateInput] = useState('');
+  const [scopeInput, setScopeInput] = useState<'podcast' | 'global'>('podcast');
+  const [reasonInput, setReasonInput] = useState('');
+  // 'audio' uses the waveform + pins, 'text' uses transcript selection.
+  // adStart/adEnd are shared across modes so toggling preserves work.
+  const [inputMode, setInputMode] = useState<'audio' | 'text'>('audio');
+  const textModeActive = mode === 'create' && inputMode === 'text';
+  // True once the user has committed a text-mode selection; suppresses the
+  // audio-mode transcript-span fetch from clobbering the user's chosen text
+  // when they toggle back to audio for fine-tuning.
+  const textTemplateFromSelectionRef = useRef(false);
 
-  const audioUrl = `/api/v1/feeds/${item.podcastSlug}/episodes/${item.episodeId}/original.mp3`;
+  // Create mode is always against original audio (you can't mark a new ad
+  // on already-cut audio). Review mode honors the parent's audioMode.
+  const effectiveAudioMode = mode === 'create' ? 'original' : audioMode;
+  const audioUrl =
+    effectiveAudioMode === 'original' || !processedAudioUrl
+      ? `/api/v1/feeds/${item.podcastSlug}/episodes/${item.episodeId}/original.mp3`
+      : processedAudioUrl;
   // The user-requested window. May extend past the actual end of the file
-  // for post-roll ads — ffmpeg silently truncates and returns fewer peaks.
+  // for post-roll ads -- ffmpeg silently truncates and returns fewer peaks.
   const requestedWindowDuration = useMemo(
     () => Math.max(0.001, windowEnd - windowStart),
     [windowStart, windowEnd],
@@ -273,7 +244,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   }, [peaks, peakResolutionMs, requestedWindowDuration]);
   // Effective end = start + actual covered duration. Used in the displayed
   // time labels so the user sees the same window the pins / waveform are
-  // actually showing — important for post-roll ads whose requested window
+  // actually showing -- important for post-roll ads whose requested window
   // extends past the file end.
   const effectiveWindowEnd = useMemo(
     () => windowStart + windowDuration,
@@ -281,27 +252,28 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   );
 
   // ------------------------------------------------------------------
-  // Fetch peaks whenever window changes.
+  // Create mode only: auto-populate text template from the transcript
+  // span the user has selected. Debounced; only fills when empty so we
+  // don't clobber edits.
   useEffect(() => {
-    let cancelled = false;
-    setPeaksError(null);
-    setPeaks(null);
-    getEpisodePeaks(item.podcastSlug, item.episodeId, windowStart, windowEnd, PEAK_RESOLUTION_MS)
-      .then((res) => {
-        if (cancelled) return;
-        setPeaks(res.peaks);
-        setPeakResolutionMs(res.resolutionMs || PEAK_RESOLUTION_MS);
-      })
-      .catch((e) => {
-        if (!cancelled) setPeaksError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [item.podcastSlug, item.episodeId, windowStart, windowEnd, resetTick]);
+    if (mode !== 'create') return;
+    if (inputMode === 'text') return;
+    // If the template already comes from a text-mode selection, leave it; the
+    // text the user picked is what they want, regardless of where the pins land.
+    if (textTemplateFromSelectionRef.current) return;
+    if (!(adStart >= 0 && adEnd > adStart)) return;
+    const t = setTimeout(() => {
+      getTranscriptSpan(item.podcastSlug, item.episodeId, adStart, adEnd)
+        .then((res) => {
+          setTextTemplateInput(res.text);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => clearTimeout(t);
+  }, [mode, inputMode, item.podcastSlug, item.episodeId, adStart, adEnd]);
 
   // ------------------------------------------------------------------
-  // Mount wavesurfer when peaks/window arrive. Region is decorative —
+  // Mount wavesurfer when peaks/window arrive. Region is decorative -- 
   // drag/resize disabled because the Pin components own that interaction.
   useEffect(() => {
     if (!containerRef.current || !peaks) return;
@@ -314,9 +286,8 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       container: containerRef.current,
       peaks: [peaks],
       duration: windowDuration,
-      waveColor: '#64748b',
-      progressColor: '#22d3ee',
-      cursorColor: 'transparent',  // we render our own playhead — see <Cursor /> below
+      ...getThemeWaveformColors(),
+      cursorColor: 'transparent', // we render our own playhead -- see <Cursor /> below
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
@@ -330,7 +301,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
 
     // wavesurfer 7 mounts its scroll-container inside an *open shadow DOM*
     // attached to containerRef. When minPxPerSec*duration > parent width
-    // it grows an overflow-x: auto scrollbar — duplicate of our own outer
+    // it grows an overflow-x: auto scrollbar -- duplicate of our own outer
     // wrapper. Walk the shadow tree and force every element with overflow
     // styling to be visible. Use setProperty(important) because wavesurfer
     // sets these as inline styles which a plain assignment can't override.
@@ -385,7 +356,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     });
     adRegionRef.current = region;
 
-    // Stop the region from swallowing pointer events — clicks anywhere in
+    // Stop the region from swallowing pointer events -- clicks anywhere in
     // the waveform (including inside the ad band) should pass through to
     // wavesurfer's seek and to our cursor scrub overlay.
     const regionEl = (region as unknown as { element?: HTMLElement }).element;
@@ -411,7 +382,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
 
   // Push zoom changes into wavesurfer AND resize the pin overlay so the
   // pins stay anchored to the right moments when zoomed. The pin overlay's
-  // width must match the waveform's actual rendered width — pins use
+  // width must match the waveform's actual rendered width -- pins use
   // `left: %` against the overlay's box.
   useEffect(() => {
     const ws = wsRef.current;
@@ -457,10 +428,15 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     }
   }, [adStart, adEnd, windowStart, windowDuration]);
 
+  // Apply playback speed to the <audio> element whenever it changes.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = playbackRate;
+  }, [playbackRate]);
+
   // ------------------------------------------------------------------
   // Cursor sync: <audio> drives the cursor position via direct DOM update
   // (ref-based, no React re-render). React state is only updated ~10×/s
-  // for the transport time readout — full-rate state updates would
+  // for the transport time readout -- full-rate state updates would
   // re-render the whole modal at 60fps and stutter the cursor.
   useEffect(() => {
     let raf = 0;
@@ -494,18 +470,14 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   // Seed audio.currentTime to a sensible spot near the ad on first
   // metadata-loaded event AND whenever the active item changes. Without
   // this, audio plays from t=0 (the start of the file) when the user hits
-  // Play — for a post-roll ad whose window is at e.g. 6980-7200s, the
+  // Play -- for a post-roll ad whose window is at e.g. 6980-7200s, the
   // cursor would never enter the visible window. Snap to ad-start so the
   // user lands on the ad. We seed to (adStart - 2) for a tiny pre-roll.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     const seek = () => {
-      const target = Math.max(0, adStart - 2);
-      // Don't fight the user if they've already moved the playhead.
-      if (audio.currentTime < 0.1) {
-        audio.currentTime = target;
-      }
+      audio.currentTime = Math.max(0, adStart - 2);
     };
     if (audio.readyState >= 1 /* HAVE_METADATA */) {
       seek();
@@ -514,7 +486,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       return () => audio.removeEventListener('loadedmetadata', seek);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.podcastSlug, item.episodeId, item.adIndex, resetTick]);
+  }, [item.podcastSlug, item.episodeId, item.start, item.end, resetTick, audioUrl]);
 
   // ------------------------------------------------------------------
   // Audio playback.
@@ -522,9 +494,13 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      // Don't snap the playhead — let the user listen anywhere they want.
-      // Use the SkipBack button (or J / J on the ad start pin) to return
-      // to the ad start.
+      // Safety net: if the cursor is parked at episode origin (or otherwise
+      // far before the visible window), snap to the ad start before playing
+      // so the user doesn't hear the episode intro on the first Play. A
+      // deliberate scrub inside or near the window is preserved.
+      if (mode === 'review' && adStart > 1 && audio.currentTime < adStart - 5) {
+        audio.currentTime = Math.max(0, adStart - 2);
+      }
       audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
       audio.pause();
@@ -550,6 +526,49 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
     audio.pause();
     audio.currentTime = adStart;
     setIsPlaying(false);
+  };
+
+  // Full-episode scrubber: click/drag to seek anywhere in the audio,
+  // independent of the waveform window. Uses pointer events so a single
+  // handler covers mouse, touch, and stylus.
+  const onScrubberPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = scrubberRef.current;
+    const audio = audioRef.current;
+    const dur = episodeDuration ?? audio?.duration ?? 0;
+    if (!el || !audio || !dur) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    const seekFrom = (clientX: number) => {
+      const rect = el.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      audio.currentTime = ratio * dur;
+    };
+    seekFrom(e.clientX);
+    // rAF-throttle moves: pointermove fires at input-device rate (often
+    // >100Hz on trackpads). Without this we'd issue a seek per event,
+    // which on remote/HLS audio stalls the media element.
+    let pendingX: number | null = null;
+    let raf = 0;
+    const flush = () => {
+      raf = 0;
+      if (pendingX !== null) {
+        seekFrom(pendingX);
+        pendingX = null;
+      }
+    };
+    const onMove = (ev: PointerEvent) => {
+      pendingX = ev.clientX;
+      if (!raf) raf = requestAnimationFrame(flush);
+    };
+    const onUp = () => {
+      if (raf) cancelAnimationFrame(raf);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
   };
 
   // ------------------------------------------------------------------
@@ -594,20 +613,18 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   };
 
   // ------------------------------------------------------------------
-  // Window expand / shrink / reset.
+  // Window expand / reset. Shrink is keyboard-only via `,`/`.`; the
+  // shrink helpers were only wired to the removed +/-1m buttons.
   const expandBack = () => setWindowStart((s) => Math.max(0, s - WINDOW_STEP_SECONDS));
   const expandForward = () => setWindowEnd((e) => e + WINDOW_STEP_SECONDS);
-  const shrinkBack = () =>
-    setWindowStart((s) => Math.min(adStart - MIN_WINDOW_PAD, s + WINDOW_STEP_SECONDS));
-  const shrinkForward = () =>
-    setWindowEnd((e) => Math.max(adEnd + MIN_WINDOW_PAD, e - WINDOW_STEP_SECONDS));
   const resetView = () => {
     setWindowStart(defaults.windowStart);
     setWindowEnd(defaults.windowEnd);
     setAdStart(defaults.adStart);
     setAdEnd(defaults.adEnd);
     setZoom(1);
-    setPeaks(null);                        // force a re-fetch + rebuild
+    // usePeaks clears + re-fetches on resetTick change; the bump is
+    // sufficient to force a fresh fetch + waveform rebuild.
     setResetTick((n) => n + 1);
     const audio = audioRef.current;
     if (audio) {
@@ -623,7 +640,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   // Mouse-wheel zoom on the waveform: Ctrl/Shift wheel zooms,
   // bare wheel still scrolls horizontally (browser default in overflow-x-auto).
   // We intercept ALL wheel events on the scroll container so the user doesn't
-  // need a modifier key — feels more natural for an audio-editing surface.
+  // need a modifier key -- feels more natural for an audio-editing surface.
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     // Only act on vertical wheel (deltaY); leave horizontal wheel alone so
     // trackpad horizontal panning still scrolls the waveform.
@@ -652,66 +669,128 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   };
 
   // ------------------------------------------------------------------
-  // Mutations
-  const confirmMutation = useMutation({
-    mutationFn: () =>
-      submitCorrection(item.podcastSlug, item.episodeId, {
-        type: 'confirm',
-        original_ad: {
-          start: item.start, end: item.end,
-          pattern_id: item.patternId ?? undefined,
-          confidence: item.confidence ?? undefined,
-          reason: item.reason ?? undefined,
-          sponsor: item.sponsor ?? undefined,
-        },
-        sponsor: sponsorInput.trim() || undefined,
-      }),
-  });
-  const rejectMutation = useMutation({
-    mutationFn: () =>
-      submitCorrection(item.podcastSlug, item.episodeId, {
-        type: 'reject',
-        original_ad: {
-          start: item.start, end: item.end,
-          pattern_id: item.patternId ?? undefined,
-          confidence: item.confidence ?? undefined,
-          reason: item.reason ?? undefined,
-          sponsor: item.sponsor ?? undefined,
-        },
-      }),
-  });
-  const adjustMutation = useMutation({
-    mutationFn: () =>
-      submitCorrection(item.podcastSlug, item.episodeId, {
-        type: 'adjust',
-        original_ad: {
-          start: item.start, end: item.end,
-          pattern_id: item.patternId ?? undefined,
-          confidence: item.confidence ?? undefined,
-          reason: item.reason ?? undefined,
-          sponsor: item.sponsor ?? undefined,
-        },
-        adjusted_start: adStart,
-        adjusted_end: adEnd,
-        sponsor: sponsorInput.trim() || undefined,
-      }),
-  });
+  // Submission -- the host owns the actual API call (so it can also
+  // refresh the surrounding episode view, navigate, etc.); we just emit.
+  const [isBusy, setIsBusy] = useState(false);
 
-  const isBusy =
-    confirmMutation.isPending || rejectMutation.isPending || adjustMutation.isPending;
+  // Mirror adStart/adEnd into the input strings whenever the boundaries
+  // change from a source OTHER than user typing (pin drag, reset,
+  // keyboard nudge). Skip when an input is focused so we don't fight
+  // the user's keystrokes.
+  const startInputRef = useRef<HTMLInputElement | null>(null);
+  const endInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (document.activeElement !== startInputRef.current) {
+      setStartInput(formatTime(adStart));
+    }
+  }, [adStart]);
+  useEffect(() => {
+    if (document.activeElement !== endInputRef.current) {
+      setEndInput(formatTime(adEnd));
+    }
+  }, [adEnd]);
+
+  // Scroll the wavesurfer viewport so a just-committed pin is visible.
+  // No-op at default zoom (the whole episode is visible). Only matters when
+  // the user has zoomed in and then types a time outside the current view.
+  const scrollPinIntoView = (time: number) => {
+    const sc = scrollContainerRef.current;
+    if (!sc || zoom <= 1) return;
+    const dur = Math.max(0.001, windowEnd - windowStart);
+    const targetPxPerSec = (sc.clientWidth / dur) * zoom;
+    const pinPx = (time - windowStart) * targetPxPerSec;
+    if (pinPx < sc.scrollLeft || pinPx > sc.scrollLeft + sc.clientWidth) {
+      sc.scrollLeft = Math.max(0, pinPx - sc.clientWidth / 2);
+    }
+  };
+
+  // If a just-committed pin lands outside the visible window (common when
+  // typing a far-away timestamp in review mode where the default window is
+  // ~6 minutes centered on the ad), grow the window to include it plus a
+  // small context margin. Peaks re-fetch + waveform re-render are wired to
+  // windowStart/windowEnd, so this lights up automatically.
+  const expandWindowToInclude = (time: number) => {
+    if (time >= windowStart && time <= windowEnd) return;
+    const maxAllowed = episodeDuration ?? Number.POSITIVE_INFINITY;
+    const newStart = Math.max(0, Math.min(windowStart, time - CONTEXT_SECONDS));
+    const newEnd = Math.min(maxAllowed, Math.max(windowEnd, time + CONTEXT_SECONDS));
+    setWindowStart(newStart);
+    setWindowEnd(newEnd);
+  };
+
+  const commitStartInput = () => {
+    const parsed = parseTimeInput(startInput);
+    if (parsed === null) {
+      setStartInput(formatTime(adStart));
+      return;
+    }
+    // Clamp only to absolute episode bounds. Cross-field validation (Start <
+    // End) is enforced at Save time so the user can edit both fields without
+    // each blur stomping the other.
+    const maxAllowed = episodeDuration ?? Number.POSITIVE_INFINITY;
+    const clamped = Math.max(0, Math.min(parsed, maxAllowed));
+    setAdStart(clamped);
+    setStartInput(formatTime(clamped));
+    expandWindowToInclude(clamped);
+    scrollPinIntoView(clamped);
+  };
+  const commitEndInput = () => {
+    const parsed = parseTimeInput(endInput);
+    if (parsed === null) {
+      setEndInput(formatTime(adEnd));
+      return;
+    }
+    const maxAllowed = episodeDuration ?? Number.POSITIVE_INFINITY;
+    const clamped = Math.max(0, Math.min(parsed, maxAllowed));
+    setAdEnd(clamped);
+    setEndInput(formatTime(clamped));
+    expandWindowToInclude(clamped);
+    scrollPinIntoView(clamped);
+  };
 
   const boundariesMoved =
     Math.abs(adStart - item.start) > 0.05 || Math.abs(adEnd - item.end) > 0.05;
 
+  // Plain const: three primitive comparisons are cheaper than useMemo's
+  // dep-tracking overhead, and the string|null result has no referential
+  // identity worth preserving for downstream memo consumers.
+  const boundaryError: string | null =
+    adStart < 0
+      ? 'Start must be at least 0:00'
+      : adEnd <= adStart
+        ? 'Start must be before End'
+        : adEnd - adStart < MIN_AD_DURATION
+          ? `Selection must be at least ${MIN_AD_DURATION}s long`
+          : null;
+  const inputBorderClass = boundaryError ? 'border-rose-500' : 'border-border';
+
   const handleConfirm = async () => {
-    if (boundariesMoved) await adjustMutation.mutateAsync();
-    else await confirmMutation.mutateAsync();
-    onSaveAndNext();
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      onSubmit(
+        boundariesMoved
+          ? {
+              kind: 'adjust',
+              adjustedStart: adStart,
+              adjustedEnd: adEnd,
+              sponsor: sponsorInput.trim() || undefined,
+            }
+          : { kind: 'confirm', sponsor: sponsorInput.trim() || undefined }
+      );
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleReject = async () => {
-    await rejectMutation.mutateAsync();
-    onSaveAndNext();
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      onSubmit({ kind: 'reject' });
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   // ------------------------------------------------------------------
@@ -727,7 +806,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
       if (e.key === ' ')      { e.preventDefault(); togglePlay(); return; }
       if (e.key === ',')      { e.preventDefault(); expandBack(); return; }
       if (e.key === '.')      { e.preventDefault(); expandForward(); return; }
-      if (e.key === 'c' || e.key === 'C') { e.preventDefault(); if (!isBusy) handleConfirm(); return; }
+      if (e.key === 'c' || e.key === 'C') { e.preventDefault(); if (!isBusy && !boundaryError) handleConfirm(); return; }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); if (!isBusy) handleReject(); return; }
       if (e.key === 's' || e.key === 'S') { e.preventDefault(); if (!isBusy) onSkip(); return; }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -744,7 +823,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   }, [isBusy, onClose, sponsorInput, adStart, adEnd, item.start, item.end]);
 
   // ------------------------------------------------------------------
-  // Style helpers — explicit hover treatments so buttons clearly
+  // Style helpers -- explicit hover treatments so buttons clearly
   // highlight on mouseover instead of looking washed out.
 
   const primaryBtn =
@@ -763,51 +842,114 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
   // ------------------------------------------------------------------
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-4"
+      onMouseDown={(e) => {
+        // Only close when the bare backdrop is the actual mousedown target.
+        // Anything inside the modal panel (inputs, buttons, listbox items
+        // from a child popup, etc.) gets ignored here without needing a
+        // child stopPropagation. In create mode we never auto-close on
+        // backdrop click -- the user is in the middle of data entry and
+        // an accidental tap would lose everything.
+        if (e.target !== e.currentTarget) return;
+        if (mode === 'create') return;
+        onClose();
+      }}
+    >
       <div
         className="bg-card rounded-lg border border-border w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-border flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">
-              {item.podcastTitle}
-            </div>
-            <h2 className="text-lg font-semibold text-foreground truncate">
-              {item.episodeTitle ?? item.episodeId}
+        {/* Header -- action chrome up top (always fits a single row on
+            mobile), title visible only at sm:+ where there's room, and
+            the detection metadata wraps onto its own line below. */}
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="hidden sm:block text-lg font-semibold text-foreground truncate min-w-0">
+              {mode === 'create' ? 'Add new ad' : 'Detected ad'}
             </h2>
-            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              <span>Stage: {item.detectionStage ?? '—'}</span>
-              {item.confidence !== null && <span>Confidence: {Math.round(item.confidence * 100)}%</span>}
-              {item.patternId !== null && <span>Pattern #{item.patternId}</span>}
-              {item.reason && <span className="italic truncate max-w-md" title={item.reason}>{item.reason}</span>}
+            <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
+              {/* Processed / Original toggle. Hidden in create mode (always original). */}
+              {mode === 'review' && onAudioModeChange && (
+                <div className="inline-flex rounded-md border border-input overflow-hidden" role="group">
+                  <button
+                    type="button"
+                    onClick={() => onAudioModeChange('processed')}
+                    className={`px-2 py-1 text-xs transition-colors ${
+                      audioMode === 'processed'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background text-muted-foreground hover:bg-secondary'
+                    }`}
+                    title="Play the post-cut audio"
+                  >
+                    Processed
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!hasOriginal}
+                    onClick={() => onAudioModeChange('original')}
+                    className={`px-2 py-1 text-xs transition-colors ${
+                      audioMode === 'original' && hasOriginal
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background text-muted-foreground hover:bg-secondary'
+                    } ${!hasOriginal ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    title={hasOriginal
+                      ? 'Play the pre-cut audio at the ads original timestamps'
+                      : 'Original audio not retained for this episode'}
+                  >
+                    Original
+                  </button>
+                </div>
+              )}
+              {/* + Add new ad. Icon-only on mobile, full label on sm:+. */}
+              {mode === 'review' && onAddNew && (
+                <button
+                  type="button"
+                  onClick={onAddNew}
+                  aria-label="Add new ad"
+                  title="Add new ad"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  <span className="hidden sm:inline">Add new ad</span>
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="p-1 rounded text-muted-foreground transition-colors hover:text-foreground hover:bg-accent"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground transition-colors hover:text-foreground hover:bg-accent"
-            aria-label="Close"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          {/* Detection metadata sits on its own row below the action chrome
+              so it can't push the toggle/close into a wrap on narrow screens. */}
+          {mode === 'review' && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>Stage: {item.detectionStage ?? '-'}</span>
+              {item.confidence !== null && <span>Confidence: {Math.round(item.confidence * 100)}%</span>}
+              {item.patternId !== null && <span>Pattern #{item.patternId}</span>}
+              {item.reason && <span className="italic truncate max-w-full" title={item.reason}>{item.reason}</span>}
+            </div>
+          )}
         </div>
 
         {/* Window controls + reset */}
-        <div className="px-6 pt-4 flex items-center justify-between gap-2 flex-wrap text-xs text-muted-foreground tabular-nums">
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={expandBack}
-              className={`px-2 py-1 rounded ${ghostBtn}`}
-              title="Expand window 1 min earlier ( , )">« +1m</button>
-            <button type="button" onClick={shrinkBack}
-              disabled={windowStart >= adStart - MIN_WINDOW_PAD - WINDOW_STEP_SECONDS}
-              className={`px-2 py-1 rounded ${ghostBtn}`}
-              title="Shrink window from the left">» −1m</button>
-            <span className="ml-2">{formatTime(windowStart)}</span>
-          </div>
-          <div className="flex items-center gap-2">
+        {/* Window header strip. ±1m buttons removed per the 2.2.0 plan;
+            the keyboard (`,` / `.`) handler still expands/shrinks the
+            window, and pin drag controls the ad boundaries themselves.
+            Window time labels prefixed so they're not a bare pair of
+            numbers floating in the chrome. */}
+        <div className={`px-4 sm:px-6 pt-3 sm:pt-4 flex items-center justify-between gap-3 flex-wrap text-xs text-muted-foreground tabular-nums ${textModeActive ? 'hidden' : ''}`}>
+          <span>
+            Window: {formatTime(windowStart)} – {formatTime(effectiveWindowEnd)}
+          </span>
+          <div className="flex items-center gap-3 flex-wrap">
             <label className="flex items-center gap-1.5 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -824,20 +966,60 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
               className={`px-2 py-1 rounded ${ghostBtn}`}
               title="Reset waveform window + ad bounds to defaults">↻ Reset</button>
           </div>
-          <div className="flex items-center gap-2">
-            <span>{formatTime(effectiveWindowEnd)}</span>
-            <button type="button" onClick={shrinkForward}
-              disabled={windowEnd <= adEnd + MIN_WINDOW_PAD + WINDOW_STEP_SECONDS}
-              className={`ml-2 px-2 py-1 rounded ${ghostBtn}`}
-              title="Shrink window from the right">« −1m</button>
-            <button type="button" onClick={expandForward}
-              className={`px-2 py-1 rounded ${ghostBtn}`}
-              title="Expand window 1 min later ( . )">+1m »</button>
-          </div>
         </div>
 
-        {/* Waveform + pin overlay */}
-        <div className="px-6 py-4">
+        {mode === 'create' && (
+          <div className="px-4 sm:px-6 pt-3">
+            <div className="inline-flex rounded-md border border-input overflow-hidden" role="group">
+              <button
+                type="button"
+                onClick={() => setInputMode('audio')}
+                className={`px-3 py-1.5 text-xs transition-colors ${
+                  inputMode === 'audio'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background text-muted-foreground hover:bg-secondary'
+                }`}
+                title="Mark the ad on the waveform"
+              >
+                By audio
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('text')}
+                className={`px-3 py-1.5 text-xs transition-colors ${
+                  inputMode === 'text'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background text-muted-foreground hover:bg-secondary'
+                }`}
+                title="Mark the ad by selecting transcript text"
+              >
+                By text
+              </button>
+            </div>
+          </div>
+        )}
+
+        {textModeActive && (
+          <TextSelectionPanel
+            slug={item.podcastSlug}
+            episodeId={item.episodeId}
+            episodeDuration={episodeDuration}
+            audioRef={audioRef}
+            adStart={adStart}
+            adEnd={adEnd}
+            onSelectionChange={(start, end, text) => {
+              setAdStart(start);
+              setAdEnd(end);
+              setTextTemplateInput(text);
+              textTemplateFromSelectionRef.current = true;
+            }}
+            playbackRate={playbackRate}
+            setPlaybackRate={setPlaybackRate}
+          />
+        )}
+
+        {/* Waveform + pin overlay. Hidden when text mode is active. */}
+        <div className={`px-6 py-4 ${textModeActive ? 'hidden' : ''}`}>
           <div className="bg-secondary/40 rounded-lg p-3 min-h-[180px]">
             {peaksError ? (
               <p className="text-sm text-destructive">Failed to load waveform: {peaksError}</p>
@@ -850,13 +1032,13 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                 className="overflow-x-auto"
               >
                 <div className="relative min-w-full" ref={overlayRef}>
-                  {/* Header strip — gives the pinheads a place to live INSIDE
+                  {/* Header strip -- gives the pinheads a place to live INSIDE
                       the overlay's box (so they aren't clipped by the
                       enclosing overflow-x-auto scroll container). */}
                   <div className="h-9" />
                   {/* Pins live in the same horizontal coordinate system as
                       the waveform host (overlayRef). When zoom > 1, wavesurfer
-                      widens its canvas — the relative wrapper grows with it,
+                      widens its canvas -- the relative wrapper grows with it,
                       so pin `left: %` keeps tracking the right time. */}
                   <Pin
                     kind="start"
@@ -890,7 +1072,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                     onPointerDown={(e) => {
                       // Drag the cursor pinhead to scrub the audio. Scrub
                       // is bounded by the visible window, NOT the ad
-                      // boundary — user can listen anywhere in context.
+                      // boundary -- user can listen anywhere in context.
                       const overlay = overlayRef.current;
                       const audio = audioRef.current;
                       if (!overlay || !audio) return;
@@ -927,7 +1109,7 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                   >
                     {/* Compact circle pinhead at top. */}
                     <div className="absolute top-1 left-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white bg-amber-500 shadow-md cursor-ew-resize" />
-                    {/* Time label — hover or while moving. */}
+                    {/* Time label -- hover or while moving. */}
                     <div className="absolute -top-5 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[10px] font-bold whitespace-nowrap shadow-md transition-opacity duration-100 pointer-events-none opacity-0 group-hover/cursor:opacity-100">
                       ▶ {formatTime(currentTime)}
                     </div>
@@ -969,21 +1151,132 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
             <span className="tabular-nums w-10 text-right">{zoom.toFixed(1)}×</span>
           </div>
 
-          {/* Boundaries readout */}
-          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground tabular-nums">
-            <span>
-              Selection:{' '}
-              <span className="text-emerald-500 font-medium">{formatTime(adStart)}</span>{' '}
-              –{' '}
-              <span className="text-rose-500 font-medium">{formatTime(adEnd)}</span>{' '}
-              <span className="text-xs">({Math.round((adEnd - adStart) * 10) / 10}s)</span>
-            </span>
-            {boundariesMoved && (
+          {/* Full-episode scrubber: dim band = visible waveform window,
+              bright fill = playback progress. */}
+          {(() => {
+            const epDur = episodeDuration ?? 0;
+            const pct = (t: number) => (epDur > 0 ? (t / epDur) * 100 : 0);
+            const onScrubberKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+              const audio = audioRef.current;
+              if (!audio || !epDur) return;
+              const step = e.shiftKey ? 10 : 5;
+              let next: number;
+              if (e.key === 'ArrowLeft') next = Math.max(0, audio.currentTime - step);
+              else if (e.key === 'ArrowRight') next = Math.min(epDur, audio.currentTime + step);
+              else if (e.key === 'Home') next = 0;
+              else if (e.key === 'End') next = epDur;
+              else return;
+              e.preventDefault();
+              audio.currentTime = next;
+            };
+            return (
+              <div className="mt-2 flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
+                <span className="w-12 text-right shrink-0">{formatTime(currentTime)}</span>
+                <div
+                  ref={scrubberRef}
+                  role="slider"
+                  aria-label="Episode progress"
+                  aria-valuemin={0}
+                  aria-valuemax={epDur}
+                  aria-valuenow={currentTime}
+                  tabIndex={0}
+                  onPointerDown={onScrubberPointerDown}
+                  onKeyDown={onScrubberKeyDown}
+                  className="group relative flex-1 h-3 rounded-full bg-background border border-border cursor-pointer touch-none focus:outline-hidden focus:ring-2 focus:ring-ring"
+                >
+                  {episodeDuration ? (
+                    <>
+                      <div
+                        aria-hidden="true"
+                        className="absolute inset-y-0 bg-muted-foreground/25 pointer-events-none"
+                        style={{
+                          left: `${pct(windowStart)}%`,
+                          width: `${pct(windowEnd - windowStart)}%`,
+                        }}
+                      />
+                      <div
+                        aria-hidden="true"
+                        className="absolute inset-y-0 left-0 rounded-l-full bg-primary pointer-events-none"
+                        style={{ width: `${pct(currentTime)}%` }}
+                      />
+                      <div
+                        aria-hidden="true"
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-primary ring-2 ring-background shadow-sm pointer-events-none group-hover:scale-110 group-focus:scale-110 transition-transform"
+                        style={{ left: `${pct(currentTime)}%` }}
+                      />
+                    </>
+                  ) : null}
+                </div>
+                <span className="w-12 text-left shrink-0">{formatTime(epDur)}</span>
+              </div>
+            );
+          })()}
+
+          {/* Boundaries readout. The two timestamps are editable inputs
+              (M:SS, MM:SS, H:MM:SS, or raw seconds) that commit to the
+              ad boundaries on blur or Enter. The pin handles still
+              update them live during drag. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground tabular-nums">
+            <span>Selection:</span>
+            <input
+              ref={startInputRef}
+              type="text"
+              inputMode="decimal"
+              value={startInput}
+              aria-label="Selection start time"
+              aria-invalid={boundaryError !== null}
+              onChange={(e) => setStartInput(e.target.value)}
+              onBlur={commitStartInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setStartInput(formatTime(adStart));
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className={`w-20 px-1.5 py-0.5 rounded border bg-background text-emerald-500 font-medium text-center tabular-nums focus:outline-hidden focus:ring-2 focus:ring-ring ${inputBorderClass}`}
+            />
+            <span>-</span>
+            <input
+              ref={endInputRef}
+              type="text"
+              inputMode="decimal"
+              value={endInput}
+              aria-label="Selection end time"
+              aria-invalid={boundaryError !== null}
+              onChange={(e) => setEndInput(e.target.value)}
+              onBlur={commitEndInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setEndInput(formatTime(adEnd));
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className={`w-20 px-1.5 py-0.5 rounded border bg-background text-rose-500 font-medium text-center tabular-nums focus:outline-hidden focus:ring-2 focus:ring-ring ${inputBorderClass}`}
+            />
+            <span className="text-xs">({Math.round((adEnd - adStart) * 10) / 10}s)</span>
+            {boundariesMoved && !boundaryError && (
               <span className="text-xs text-amber-500">
                 (originally {formatTime(item.start)} – {formatTime(item.end)})
               </span>
             )}
           </div>
+          {boundaryError && (
+            <div
+              role="alert"
+              className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-rose-500/10 text-rose-500 text-xs font-medium"
+            >
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>{boundaryError}</span>
+            </div>
+          )}
 
           <audio
             ref={audioRef}
@@ -1027,6 +1320,26 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
                 title="Stop (pause + return to START)">
                 <Square className="w-4 h-4" />
               </button>
+              <div className="ml-1 pl-1 border-l border-border/60" aria-hidden="true" />
+              <label className="relative inline-flex items-center" title="Playback speed">
+                <span className="sr-only">Playback speed</span>
+                <select
+                  value={playbackRate}
+                  onChange={(e) => setPlaybackRate(Number(e.target.value))}
+                  aria-label="Playback speed"
+                  className={`appearance-none h-8 pl-2 pr-5 rounded text-xs font-semibold tabular-nums cursor-pointer ${ghostBtn} ${playbackRate !== 1 ? 'text-foreground' : ''} focus:outline-hidden focus:ring-2 focus:ring-ring`}
+                >
+                  {PLAYBACK_RATES.map((r) => (
+                    <option key={r} value={r}>{r}&times;</option>
+                  ))}
+                </select>
+                <svg
+                  className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 opacity-60"
+                  viewBox="0 0 12 12" fill="none" aria-hidden="true"
+                >
+                  <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </label>
             </div>
             <div className="flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
               <span className="text-foreground">{formatTime(currentTime)}</span>
@@ -1047,13 +1360,55 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
           </div>
         </div>
 
-        {/* Sponsor prompt */}
-        {showSponsorPrompt ? (
-          <div className="px-6 py-4 border-t border-border bg-secondary/30">
+        {/* Sponsor prompt + (in create mode) text-template + scope */}
+        {mode === 'create' ? (
+          <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-border bg-secondary/30 space-y-3">
+            <label className="block text-sm font-medium text-foreground">
+              Sponsor name
+              <div className="mt-1">
+                <SponsorInput
+                  value={sponsorInput}
+                  onChange={setSponsorInput}
+                  sponsors={sponsorOptions}
+                />
+              </div>
+            </label>
+            <label className="block text-sm font-medium text-foreground">
+              Text template
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                (auto-populated from the transcript; edit before save)
+              </span>
+              <textarea
+                value={textTemplateInput}
+                onChange={(e) => setTextTemplateInput(e.target.value)}
+                rows={4}
+                className="mt-1 w-full px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring text-xs font-mono"
+              />
+              <div className={`text-xs mt-1 ${textTemplateInput.trim().length < 50 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {textTemplateInput.trim().length} / 50 chars min
+              </div>
+            </label>
+            <label className="block text-sm">
+              <span className="block mb-1 text-muted-foreground">Reason (optional)</span>
+              <input
+                type="text" value={reasonInput}
+                onChange={(e) => setReasonInput(e.target.value)}
+                placeholder="Why this is an ad"
+                className="w-full px-3 py-1.5 rounded border border-border bg-background text-foreground text-sm"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={scopeInput === 'global'}
+                onChange={(e) => setScopeInput(e.target.checked ? 'global' : 'podcast')} />
+              <span>Apply across all podcasts (global pattern)</span>
+            </label>
+          </div>
+        ) : showSponsorPrompt ? (
+          <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-border bg-secondary/30">
             <label htmlFor="sponsor" className="block text-sm font-medium text-foreground mb-1">
               Sponsor name
               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                (so this confirmation can train Stage 2 — leave blank to skip pattern creation)
+                (so this confirmation can train Stage 2 - leave blank to skip pattern creation)
               </span>
             </label>
             <input
@@ -1072,33 +1427,78 @@ function AdReviewModal({ item, onClose, onSaveAndNext, onSkip }: Props) {
         )}
 
         {/* Action bar */}
-        <div className="px-6 py-4 border-t border-border bg-secondary/40 flex items-center justify-between gap-3 flex-wrap">
-          <div className="text-xs text-muted-foreground">
-            {boundariesMoved
-              ? 'Confirm will save adjusted boundaries.'
-              : 'Confirm will record this ad as-detected.'}
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={onSkip} disabled={isBusy}
-              className={`px-4 py-1.5 rounded-lg ${ghostBtn} text-sm`}
-              title="Skip — leave in inbox, hide from this session (S)">
-              Skip & Next
-            </button>
-            <button type="button" onClick={handleReject} disabled={isBusy}
-              className={`px-4 py-1.5 rounded-lg ${destructiveBtn} text-sm`}
-              title="Mark as not an ad and advance (R)">
-              {rejectMutation.isPending ? 'Rejecting…' : 'Reject & Next'}
-            </button>
-            <button type="button" onClick={handleConfirm} disabled={isBusy}
-              className={`px-4 py-1.5 rounded-lg ${primaryBtn} text-sm`}
-              title="Save & next (C)">
-              {confirmMutation.isPending || adjustMutation.isPending
-                ? 'Saving…'
-                : boundariesMoved
-                  ? 'Save adjustment & next'
-                  : 'Confirm & next'}
-            </button>
-          </div>
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-border bg-secondary/40 flex items-center justify-between gap-2 sm:gap-3 flex-wrap">
+          {mode === 'create' ? (
+            <>
+              <div className="text-xs text-muted-foreground">
+                Save creates a new ad pattern tagged as `created_by=user`.
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={onClose} disabled={isBusy}
+                  className={`px-4 py-1.5 rounded-lg ${ghostBtn} text-sm`}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    isBusy ||
+                    !sponsorInput.trim() ||
+                    textTemplateInput.trim().length < 50 ||
+                    boundaryError !== null
+                  }
+                  onClick={() => {
+                    if (!onCreate) return;
+                    onCreate({
+                      kind: 'create',
+                      start: adStart,
+                      end: adEnd,
+                      sponsor: sponsorInput.trim(),
+                      textTemplate: textTemplateInput.trim(),
+                      scope: scopeInput,
+                      reason: reasonInput,
+                    });
+                  }}
+                  className={`px-4 py-1.5 rounded-lg ${primaryBtn} text-sm`}>
+                  {isBusy ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-muted-foreground">
+                {boundariesMoved
+                  ? 'Confirm will save adjusted boundaries.'
+                  : 'Confirm will record this ad as-detected.'}
+              </div>
+              {/* Equal-width buttons across viewports. Short labels
+                  on mobile (so 3 fit on a 320-360px viewport), full
+                  "& Next" labels on sm: where there's room. */}
+              <div className="flex items-stretch gap-1.5 sm:gap-2 w-full sm:w-auto">
+                <button type="button" onClick={onSkip} disabled={isBusy}
+                  className={`flex-1 sm:flex-none sm:min-w-[7rem] basis-0 h-9 px-2 sm:px-4 rounded-lg ${ghostBtn} text-sm text-center whitespace-nowrap`}
+                  title={hasNext ? 'Skip and advance to the next ad (S)' : 'Skip (S)'}>
+                  <span className="sm:hidden">Skip</span>
+                  <span className="hidden sm:inline">{hasNext ? 'Skip & Next' : 'Skip'}</span>
+                </button>
+                <button type="button" onClick={handleReject} disabled={isBusy}
+                  className={`flex-1 sm:flex-none sm:min-w-[7rem] basis-0 h-9 px-2 sm:px-4 rounded-lg ${destructiveBtn} text-sm text-center whitespace-nowrap`}
+                  title="Mark as not an ad (R)">
+                  {isBusy ? '...' : (<>
+                    <span className="sm:hidden">Reject</span>
+                    <span className="hidden sm:inline">{hasNext ? 'Reject & Next' : 'Reject'}</span>
+                  </>)}
+                </button>
+                <button type="button" onClick={handleConfirm} disabled={isBusy || boundaryError !== null}
+                  className={`flex-1 sm:flex-none sm:min-w-[7rem] basis-0 h-9 px-2 sm:px-4 rounded-lg ${primaryBtn} text-sm text-center whitespace-nowrap`}
+                  title={boundaryError ?? "Save changes (C)"}>
+                  {isBusy ? '...' : (<>
+                    <span className="sm:hidden">Save</span>
+                    <span className="hidden sm:inline">{hasNext ? 'Save & Next' : 'Save'}</span>
+                  </>)}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

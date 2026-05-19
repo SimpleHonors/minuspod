@@ -89,12 +89,16 @@ def update_provider(provider):
             except SSRFError:
                 return error_response('base URL failed SSRF validation', 400)
             db.set_setting(cfg['base_url'], url)
-        else:
-            db.set_setting(cfg['base_url'], '')
+        # Empty baseUrl ignored; clear via DELETE /providers/<name>. Issue #235.
 
     if cfg['model'] and 'model' in body:
         model = body['model'] or ''
         db.set_setting(cfg['model'], model)
+
+    # Drop the TTL-cached provider settings so the next read sees this write
+    # immediately (see issue #234: stale cache made Save Changes vanish).
+    from llm_client import invalidate_provider_cache
+    invalidate_provider_cache()
 
     logger.info("provider=%s updated source=%s", provider, _source_for(db, cfg))
     return json_response(_provider_status(db, cfg), 200)
@@ -107,6 +111,10 @@ def clear_provider(provider):
     cfg = _PROVIDERS[provider]
     db = Database()
     db.clear_secret(cfg['secret'])
+    if cfg['base_url']:
+        db.set_setting(cfg['base_url'], '')
+    from llm_client import invalidate_provider_cache
+    invalidate_provider_cache()
     logger.info("provider=%s cleared", provider)
     return json_response(_provider_status(db, cfg), 200)
 

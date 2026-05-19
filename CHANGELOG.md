@@ -6,6 +6,585 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **CPU image now ships as a multi-arch manifest covering `linux/amd64` and `linux/arm64` (issue #256).** Users on Raspberry Pi 5, Ampere, Graviton, M-series Macs, and other arm64 hosts can pull `ttlequals0/minuspod:<version>-cpu` or `:cpu` without docker-compose's amd64 emulation; Docker auto-selects the matching variant at pull time. GPU image (`Dockerfile`, `:<version>`, `:latest`) stays amd64-only because NVIDIA's arm64 CUDA images target Jetson, not generic arm64 cloud hosts.
+- **CPU image build moves to a GitHub Actions workflow.** `.github/workflows/cpu-image.yml` runs the amd64 leg on `ubuntu-latest` and the arm64 leg on the free native `ubuntu-24.04-arm` runner (no QEMU), then merges both arch-specific digests into a single manifest list. Trigger: `gh workflow run cpu-image.yml -f version=<version>` after the GPU image lands; add `-f promote_cpu_tag=true` to also move the floating `:cpu` tag. Requires repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The local `/build-and-push` flow stays as GPU-only.
+- **`docker-compose.cpu.yml` no longer pins `platform: linux/amd64`.** Docker now picks the matching arch from the published manifest list. Re-add the pin only to force amd64 emulation on an arm64 host.
+
+## [2.4.20] - 2026-05-18
+
+### Fixed
+
+- **Text-mode transcript selection now stays highlighted when focus moves into the Text template / Sponsor / Reason fields.** The browser clears the native Selection when focus moves out of the transcript region, which made the highlight disappear the moment the user clicked into the textarea below it. `TextSelectionPanel.tsx` now derives a `selectedRange` from `adStart`/`adEnd` and applies a `bg-primary/30` class to the in-range word spans, so the visual highlight survives focus changes, re-renders, and audio-mode pin drags.
+- **Active text-selection drag is now visible on mobile (and more visible in dark mode generally).** The transcript container previously fell back to the browser default `::selection` color, which is near-invisible against a dark background on iOS Safari and Chrome Android. Added `selection:bg-primary/50 selection:text-primary-foreground` to the transcript root so the active drag color stands out during selection.
+
+## [2.4.19] - 2026-05-18
+
+### Fixed
+
+- **Cancel/X on the Add-new-ad modal no longer reopens the Detected-ad modal underneath.** 2.2.6 added a `cameFromReviewRef` so that Cancel from create-mode would return the user to the review modal when create was entered via the in-modal `+ Add new ad` button. Users found the reappearing review modal more disruptive than helpful (the page-header path closed cleanly, but the in-modal path bounced them back into review). Both close paths now route to `onClose` and unmount the editor. Save still flips back to review via `handleCreateSubmit` so the user can keep working through a queue after committing an ad.
+
+## [2.4.18] - 2026-05-18
+
+### Added
+
+- **Text-mode ad creation in the Add-new-ad modal.** A toggle at the top of the modal switches between `By audio` (the existing waveform-pin flow) and `By text`. In text mode the modal renders the original transcript with word-level timestamps, a client-side search with `N of M` match navigation, and native browser text selection that resolves the highlighted range to exact Whisper word timings. The resolved bounds and selected text populate the existing template + adStart/adEnd state, so toggling back to audio mode keeps the work and the optional Reason field stays editable. Backend was already in place: `GET /feeds/<slug>/episodes/<id>/original-segments` returns word-level `words[]` per segment.
+- **Configurable detection-window geometry.** `window_size_seconds` and `window_overlap_seconds` are now tunables in Settings > LLM Tunables (defaults 600s / 180s, identical to prior behavior). Server-side bounds are size in `[120, 1800]` and overlap in `[0, 1770]`, with a cross-field validator that rejects overlap >= size. Lets small-context local LLM users shrink the window to fit. The two readers in `src/ad_detector/` resolve via `get_stage_tunable()` at call time so Settings UI changes take effect on the next episode without restart.
+- **Reset-to-default UI for every stage tunable.** A `Reset` link sits beside each numeric input in `StageTunablesSection.tsx`, including the new window inputs and the existing temperature / max-tokens / reasoning budget / reasoning effort controls. Disabled when the value already matches the default or when an env var has pinned it.
+- **Structural rate-limit detection and webhook event.** A new `EVENT_RATE_LIMIT_STRUCTURAL` webhook fires when a single LLM request's token count structurally exceeds the provider's per-minute cap (Groq free tier is the main triggering case). The retry loop in `src/utils/llm_call.py` short-circuits this case instead of consuming the full backoff budget, and the episode's `error_message` reports the limit, the requested count, and the two remedies (shrink the detection window in LLM Tunables, or change provider/tier).
+
+### Changed
+
+- **Renamed the settings section `LLM Tunables (per stage)` to `LLM Tunables`.** The window inputs are global, not per-stage; the old title no longer described the contents.
+
+## [2.4.17] - 2026-05-17
+
+### Fixed
+
+- **Episode list checkbox was hard to tap on mobile; finger landed on the row Link instead.** The `Checkbox` component is a 16px square sitting inside a non-padded absolute wrapper; touchable area was the visible control only, well below the 44px iOS HIG minimum. Most mobile taps hit the surrounding `<Link>` and navigated into the episode, losing any in-progress selection. Replaced the wrapper with a 44x44 `<button>` that stops propagation, prevents default, and routes the tap to `onToggle`; the visible checkbox is centered inside. Bumped the row's left padding to clear the larger tap zone.
+
+## [2.4.16] - 2026-05-17
+
+### Fixed
+
+- **Bulk action buttons in `FeedDetail.tsx` shifted size with the eligible count.** "Full Reprocess (N)" was wrapping onto two lines on narrow viewports while "Reprocess (N)" and "Delete (N)" stayed single-line, giving the toolbar an uneven look. Added `whitespace-nowrap` + `min-w-[8rem] text-center` so every button is the same width and never wraps regardless of the count.
+
+## [2.4.15] - 2026-05-17
+
+### Fixed
+
+- **Bulk action toolbar hid Reprocess/Delete buttons on mixed-status selection.** `FeedDetail.tsx` required EVERY selected episode to share the same status group before showing the matching bulk button. A selection that mixed processed episodes with a stuck `pending` row (e.g. one queued via a prior bulk that the drainer dropped) collapsed to a "Mixed statuses" message, leaving only the feed-level "Reprocess All" dropdown in the header. Now shows each button with an eligibility count (`Reprocess (3)`, `Process (2)`, etc.) when at least one selected item matches; the backend already skips ineligible rows, so a mixed selection still does the right thing.
+
+## [2.4.14] - 2026-05-17
+
+### Fixed
+
+- **Bulk `process` action on auto-process-disabled feeds was silently dropped.** The 2.4.12 fix that let user-initiated reprocesses bypass the background drainer's auto-process gate keyed on `reprocess_requested_at`, which is set by the single-episode and bulk `reprocess` / `reprocess_full` paths. The bulk `process` (first-time process) path did not set the field, so the drainer's bypass check still saw NULL and marked the row `completed` with reason "Auto-process disabled for this feed". Bulk `process` now stamps `reprocess_requested_at` like the other user-initiated paths, so first-time process from the UI on a disabled feed runs through normally.
+
+## [2.4.13] - 2026-05-17
+
+### Changed
+
+- **`ad_patterns.source_language` column (#252).** Patterns are now stamped with the ISO 639-1 transcript language they were learned from (read from the `whisper_language` setting; `'auto'` leaves the column null for language-agnostic behavior). `text_pattern_matcher.find_matches` accepts a `language=` argument and excludes patterns whose `source_language` is set and differs; nulls match any language so existing rows behave as before. The community export bundle includes `source_language` so a Spanish pattern submitted from Mexico won't get treated as a generic English-corpus global pattern on import. Helper at `src/utils/language.py:get_pattern_language(db)`. Schema migration is additive and idempotent. Defense-in-depth metadata only -- runtime impact is minimal because TF-IDF already self-prunes across languages.
+
+### Dependencies
+
+- **pip**: `anthropic 0.100.0 -> 0.102.0`, `openai 2.36.0 -> 2.37.0`, `requests 2.33.1 -> 2.34.2`, `huggingface-hub 1.14.0 -> 1.15.0` (#251, #250, #249, #248).
+- **npm**: `lucide-react 1.14.0 -> 1.16.0`, `swagger-ui-dist 5.32.5 -> 5.32.6`, `eslint 10.3.0 -> 10.4.0`, `typescript-eslint 8.59.2 -> 8.59.3`, `vite 8.0.10 -> 8.0.13` (#247, #246, #245, #244, #243).
+- **GitHub Actions**: `actions/labeler 5.0.0 -> 6.1.0`, `actions/checkout 4.3.1 -> 6.0.2`, `actions/github-script 8.0.0 -> 9.0.0` (#242, #241, #240). Pins updated to commit SHA per the audit policy.
+
+### Deferred
+
+- **Ubuntu 24.04 -> 26.04 on `Dockerfile.cpu` (#208) deferred.** Ubuntu 26.04 is a non-LTS interim release and the deadsnakes PPA (which the CPU image uses to install Python 3.11) has not confirmed publishing for questing yet. CPU image stays on 24.04 LTS until either deadsnakes ships 26.04 binaries or the image switches to `python:3.11-slim` and skips the PPA entirely. PR #208 stays open as a tracking placeholder.
+
+## [2.4.12] - 2026-05-17
+
+### Fixed
+
+- **User reprocesses on auto-process-disabled feeds were silently dropped.** The background queue drainer (`src/main_app/background.py`) checked `is_auto_process_enabled_for_podcast` for every row and marked it `completed` with reason "Auto-process disabled" if the feed was disabled. This was the right behavior for RSS auto-discovery but blocked explicit user reprocesses too. The drainer now reads the episode row and bypasses the gate when `reprocess_requested_at` is set, so a user-initiated reprocess on a disabled feed runs through normally. RSS auto-discovery behavior is unchanged.
+- **Legacy reprocess endpoint now sets `reprocess_requested_at`.** Previously only the mode-aware endpoint at `POST /episodes/<slug>/<id>/reprocess` set this field; the legacy `POST /feeds/<slug>/episodes/<id>/reprocess` did not. Both endpoints now write it, so the drainer's user-initiated detection works regardless of which endpoint the frontend hits.
+
+### Changed
+
+- **`GET /api/v1/episodes/processing` now also surfaces queued episodes (waiting on the lock).** Items appear with `stage="queued"` and a `queuedAt` timestamp alongside the currently-processing entry. The reprocess endpoints register the queued episode with `StatusService.queue_episode` after enqueuing into `auto_process_queue`, so the top banner's `queueLength` / `queuedEpisodes` and the Settings queue panel both show "what's coming next".
+
+## [2.4.11] - 2026-05-17
+
+### Fixed
+
+- **Reprocess silently skipped when episode already in `auto_process_queue`.** The two single-episode reprocess endpoints (`POST /feeds/<slug>/episodes/<id>/reprocess` and `POST /episodes/<slug>/<id>/reprocess`) called `queue_episode_for_processing`, which uses `INSERT ... ON CONFLICT DO NOTHING`. When the queue already had a `failed` row for the episode from a prior run, the re-queue was a no-op: `episodes.status` flipped to `pending` but the background queue processor never picked the episode up. Both endpoints now use `upsert_episode_for_processing`, which resets the existing row to `status='pending'` with `attempts=0`. The bulk endpoint already used the upsert helper; this brings the single-episode endpoints in line. Episodes stuck in pending limbo from a previous reprocess need to be reprocessed again after this release.
+
+## [2.4.10] - 2026-05-17
+
+### Fixed
+
+- **Issue #235 (Transcription URL reset on Save).** `PUT /api/v1/settings/providers/<name>` no longer wipes the stored base URL when the request body contains `baseUrl: ""`. The empty value is now ignored so a pre-hydration `handleProviderKeySave` (issue #234's co-persist path) cannot clear a previously-saved URL. To explicitly clear, use `DELETE /api/v1/settings/providers/<name>`, which now also clears `cfg['base_url']` alongside the secret. The frontend `handleProviderKeySave` mirrors the guard and only sends `baseUrl` when local state is non-empty.
+- **Issue #236 / #237 (banner says processing while Settings queue says empty).** `GET /api/v1/episodes/processing` now merges the DB rows (`episodes.status='processing'`) with `StatusService.current_job` from `processing_status.json`. The Settings panel and the top banner share a source of truth, so a worker that is mid-`Pass 1: Detecting ads (M/N)` shows up in both places instead of the panel saying "No episodes currently processing".
+- **Issue #237 (negative LLM cost, e.g. `$-76,579`).** `database.SettingsMixin.upsert_fetched_pricing` rejects rows with negative `input_cost_per_mtok` / `output_cost_per_mtok` and warns with the source. `database.StatsMixin._calculate_token_cost` clamps a pre-existing negative row to zero (with a WARN per call) so legacy DBs stop accumulating a wrong-sign running total in `stats.total_llm_cost`. Operators should `UPDATE model_pricing SET input_cost_per_mtok=0 WHERE input_cost_per_mtok < 0;` (and the same for `output_cost_per_mtok`) to silence the warning permanently, then re-fetch pricing.
+- **Issue #238 (HTTP 429 treated as permanent failure).** Two changes: `ad_detector.process_transcript` now preserves the last underlying error type and status code in the all-windows-failed return (instead of the generic `"All N windows failed"` that swallowed 429 context). `processing._handle_processing_failure` then routes rate-limit failures through a new branch that retries WITHOUT incrementing `retry_count`, so a sustained provider 429 no longer chews through `MAX_EPISODE_RETRIES` and pushes the episode to `PERMANENTLY_FAILED`. The check uses the existing `llm_client.is_rate_limit_error` helper.
+
+### Docs
+
+- **`docs/DEPLOYMENT.md` rewritten for accuracy:** dropped the duplicate env-var table (`environment-variables.md` is the canonical reference) and added a "minimum production env" section pointing to `ANTHROPIC_API_KEY`, `BASE_URL`, `APP_PASSWORD`, `MINUSPOD_MASTER_PASSPHRASE` plus the `MINUSPOD_TRUSTED_PROXY_COUNT` requirement behind any reverse proxy. Fixed the health-response shape (no `queue_available` key). Replaced the incorrect "automatic backup every 24 hours" claim with the actual `GET /api/v1/system/backup` flow (rate-limited 6/h, AES-GCM when `MINUSPOD_MASTER_PASSPHRASE` is set) plus a manual `tar` snapshot recipe. Added the CPU image variant to the Updating section.
+
+## [2.4.9] - 2026-05-16
+
+### Security
+
+- **Session is now rotated on login and password change.** `session.clear()` runs before re-setting `permanent=True` and `authenticated=True` on `/auth/login` and `/auth/password`, so a pre-auth cookie can't ride the new authenticated state (session fixation). `SameSite=Strict` + `Secure` already mitigated but did not eliminate the window; this closes it.
+- **`/auth/logout` now requires a valid CSRF token.** The route stays in `AUTH_EXEMPT_PATHS` so an expired session can still call it, but the handler validates the double-submit token manually. Unauthenticated callers continue to bypass (csrf.validate returns None when session.authenticated is False), preserving the "always callable to clear stale state" property.
+- **Startup refuses to run when the Flask secret key cannot be coordinated.** If both the lockfile fallback AND the DB write fail, `get_or_create_secret_key()` now raises `SecretKeyUnavailableError` instead of warn-and-continue with a divergent key. Operators can bypass by setting `SECRET_KEY` via env.
+- **JSON responses now ship `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`.** Matches the lockdown already applied to `/feed/*` RSS. Closes a small corner where a JSON endpoint mistakenly returned `text/html` would have been CSP-less.
+- **`/api/v1/patterns/import` mode validation moved to the route boundary** so the request -> bound-check -> response flow is visible to static analyzers; closes a py/reflective-xss false positive raised by CodeQL against a helper-side narrowing.
+- **`community_sync._fetch_manifest` now routes through `safe_http.safe_get(trust=OPERATOR_CONFIGURED)` with a 256 KB cap.** The manifest URL is a build-time constant today, but the wrapper protects any future setting that exposes it.
+- **`entrypoint.sh`** added `-xdev` to both `find` calls and a pre-check warning when `$DATA_DIR` is owned by a uid that's neither 0 nor `$APP_UID`. Warning-only this release so we see behavior on existing volumes before tightening to fatal.
+- **Container hardening:** `docker-compose.yml` and `docker-compose.cpu.yml` now set `security_opt: ["no-new-privileges:true"]` and `cap_drop: [ALL]` on the `minuspod` service. App already runs as UID 1000 via `setpriv`; no caps needed after start.
+- **Build reproducibility:** pinned `pip==25.2` and `setuptools==80.9.0` in both `Dockerfile` and `Dockerfile.cpu`.
+- **Supply-chain:** every `actions/*` and third-party GitHub Action in `.github/workflows/*.yml` pinned to a commit SHA (human-readable tag kept as a comment). Closes the floating-major-tag exposure flagged in the audit.
+- **Pre-commit hook:** ASCII-glyph guard blocks em-dashes, smart quotes, and U+2605; Bearer-token regex post-filtered to skip common placeholder strings (example/placeholder/test/your-/fixture/sample/dummy/fake/redacted/xxxxx).
+- **RSS DOCTYPE pre-scan widened from 4 KB to 64 KB** so feeds with extensive leading whitespace still surface the `xml_forbidden_construct` warning. `defusedxml.defuse_stdlib()` still gates XXE.
+- **66 em-dashes and 1 U+2605 swept from code/docs/UI** (ASCII-only). Future regressions blocked by the new pre-commit guard.
+
+### Refactor (no behavior change)
+
+- **`src/ad_detector.py` split into `src/ad_detector/` package**: `__init__.py` (AdDetector class + 28 public re-exports), `boundaries.py` (refine/extend/snap/merge/validate/dedupe), `prompts.py` (USER_PROMPT_TEMPLATE, create_windows, format_window_prompt, get_static_system_prompt, parse_ads_from_response). Central file dropped 2575 -> 1403 LOC. Git records the rename so blame survives.
+- **`src/database/schema.py` split into `src/database/schema/` package**: pure code-motion, SQL DDL constants moved to `tables.py`. SHA-256 of `SCHEMA_SQL` and `MIGRATION_INDEXES_SQL` identical before/after. 92 migration-focused tests pass.
+- **`frontend/src/components/AdReviewModal.tsx`** decomposed: helpers moved to `frontend/src/utils/adReviewHelpers.ts`, `Pin` subcomponent to `frontend/src/components/ad-editor/Pin.tsx`, peaks logic to `usePeaks` hook. 1654 -> 1448 LOC. Public surface unchanged.
+- **`src/main_app/processing.py`** four pipeline-stage helpers decomposed: `_run_ad_reviewer` 95 -> 67, `_refine_and_validate` 124 -> 67, `_finalize_episode` 109 -> 26, `_run_verification_pass` 157 -> 93. Every audio_logger call preserved verbatim.
+- **`src/ad_detector.learn_from_detections`** decomposed 151 -> 52 LOC into four phase helpers (`_ad_passes_learning_filters`, `_resolve_sponsor_for_learning`, `_sponsor_blocked_by_gates`, `_create_pattern_and_fingerprint`).
+- **`src/api/settings.update_ad_detection_settings`** decomposed 263 -> 34 LOC dispatcher across nine `_apply_*_fields` phase helpers.
+- **`src/api/patterns.py`** three large handlers decomposed: `submit_correction` 247 -> 44 (orchestrator over five handlers), `_submit_correction_create` 120 -> 77, `import_patterns` 136 -> 40.
+- **EpisodeContext dataclass** (`src/main_app/episode_context.py`) shrinks pipeline parameter lists: `_detect_ads_first_pass` 11 -> 6 params, `_run_verification_pass` 13 -> 7, `_apply_pass2_reviewer` 12 -> 6.
+- **`src/main_app/_get_components()` tuples replaced with direct singleton imports** in processing.py, routes.py, background.py, feeds.py. Eliminates the silent tuple-reorder failure mode.
+- **Helper consolidation**: new `src/utils/ttl_cache.py` (cleanup_service, llm_client, sponsor_service now share it), `overlap_ratio` + `ranges_overlap` in `src/utils/time.py`, `NON_BRAND_WORDS` consolidated to `src/utils/constants.py`, sponsor extraction consolidated to `SponsorService`.
+- **Frontend helper consolidation**: `Artwork.tsx` + `ARTWORK_FALLBACK_SVG` (was duplicated 4x), `useLocalStorageState` hook (was hand-rolled 4x), `useSyncFromQuery` hook (replaces three Settings.tsx snapshot blocks), `NAV_ITEMS` table + `<NavLink>` in `Layout.tsx` (14 link blocks -> 6 entries; 234 -> 156 LOC), `DETECTION_STAGE_META` lookup, `apiFileRequest` helper (four blob downloads consolidated).
+- **Type tightening**: `PatternScope` union, `EpisodeStatus(str, Enum)`, `SettingEntry` dataclass.
+- **Dead code removed**: `INVALID_SPONSOR_REASONS` alias, `network_id` parameter from `process_transcript` (never supplied by any caller; downstream `text_pattern_matcher.find_matches` keeps it because other call sites use it).
+- **Inline imports hoisted** in `src/api/episodes.py` (audio_peaks, chapters_generator, llm_client, processing_queue), `src/api/feeds.py` (urllib.parse, defusedxml), `src/audio_fingerprinter.py` (acoustid lifted to single module-level guarded import).
+
+### Tooling (benchmark; not in runtime image)
+
+- **Benchmark report scatter plots now assign a unique color per model.** `_render_pareto`, `_render_precision_recall_chart`, and `_render_token_efficiency_chart` were drawing from `tab20` with `i % 20`, so any run with more than 20 models silently reused colors. Added `_distinct_colors(n)` that concatenates `tab20 + tab20b + tab20c` (60 categorical colors) and falls back to evenly-spaced `hsv` past that.
+
+## [2.4.8] - 2026-05-15
+
+### Security
+
+- **Replaced `gosu` with `setpriv` in `entrypoint.sh` and dropped the `gosu` package from both GPU and CPU images.** Clears 50 Go stdlib CVEs (3 CRITICAL, 19 HIGH, 26 MEDIUM, 2 LOW) that Ubuntu 24.04's `gosu 1.17` carries because it was compiled against Go stdlib 1.22.2. `setpriv` ships with `util-linux` in the base image, has no Go runtime, and is the upstream-recommended gosu alternative. The privilege-drop flags match gosu's defaults: `--reuid=minuspod --regid=minuspod --init-groups --inh-caps=-all`. The two remaining torch CVEs (local DoS, LOW + MEDIUM) need a torch 2.6.0 -> 2.8.0 upgrade and are tracked separately.
+
+## [2.4.7] - 2026-05-15
+
+### Changed
+
+- **Detection-note line on the episode page is now prefixed with "Match:"** so it reads as the matcher's rationale instead of looking like a contradicting sponsor when the field carries free-text reviewer notes (e.g. boundary extension that sweeps adjacent ads into one detection, where `reason` ends up describing the tail brand while `sponsor` is the matched pattern's brand).
+
+### Fixed
+
+- **Community patterns now import with `scope='global'` instead of preserving the source instance's scope.** Pre-2.4.7 the export pipeline copied the source pattern's `scope` (almost always `'podcast'`) into the bundle, and the import pipeline used it verbatim. Since `podcast_id` is stripped on export, the imported row was scope='podcast' with `podcast_id=NULL` and never matched anything. Tag eligibility (`text_pattern_matcher._filter_patterns_by_scope`) is what actually gates community patterns per podcast; the legacy scope column should just be `global`.
+- **Migration repairs existing community rows.** `_normalize_community_scope` UPDATEs every `source='community'` row to `scope='global'`, clears `podcast_id` / `network_id`. Stamped via `community_scope_revision`; idempotent.
+- **12 seed bundle files in `patterns/community/`** were rewritten from `scope: podcast` to `scope: global`. Manifest regenerated. Earlier 2.4.0-2.4.6 syncs pulled them with scope=podcast; the migration above re-stamps those rows on the next container start.
+
+## [2.4.6] - 2026-05-15
+
+### Fixed
+
+- **intro/outro_variants no longer get double-JSON-encoded on auto-created patterns.** `text_pattern_matcher` was calling `db.create_ad_pattern(intro_variants=json.dumps([intro]))` while the DB layer also `json.dumps`'d its input, so the column stored `'"[\\"text\\"]"'`. Submitting any of those patterns through the community bundle pipeline exploded the value into a list of single characters (the user's first bundle had `intro_variants` of length 196 starting with `['[', '"', 'E', 'm', ...]`). Now the matcher passes a plain list and the DB layer encodes once.
+- **Migration repairs existing rows.** A one-shot `_repair_double_encoded_variants` migration re-encodes any `ad_patterns.intro_variants` / `outro_variants` whose stored value parses to a string (instead of a list) on the first `json.loads`. Idempotent; stamped via the `variant_reencode_revision` setting. Operators on 2.4.5 with broken rows will see them fix themselves on next container start.
+- **Community export pipeline is defensive about the same bug.** `_safe_parse_variants` in `community_export.py` retries the decode when the first parse returns a string, so bundles built from a not-yet-migrated DB still produce clean output.
+
+### Changed
+
+- Dialog CLI snippet now hints `gh pr create --fill --label pattern` so the label gets requested directly. The labeler workflow still applies it automatically on path match; this is belt-and-suspenders.
+
+## [2.4.5] - 2026-05-15
+
+### Changed
+
+- **Submit-to-community is now a bundle download, not N prefilled PR tabs.** Picking "Submit to community" in the Export dialog opens a preview that lists which patterns will pass quality gates and which will not (with reasons). Confirming downloads a single `minuspod-submission-<id>.json` containing every passing pattern. You open one PR for the whole bundle in your fork. The old per-tab flow fell over at scale: 215 selected -> 8 tabs survived the popup blocker, 20 forced JSON downloads (each over the 7 KB URL limit), 187 silent 400s rendered as `[object Object]`.
+- The PR-side validator and the manifest builder both handle the new bundle format (`format: minuspod-community-submission`) by flattening `patterns[]` into per-pattern validations / manifest entries. Existing per-file submissions still work.
+
+### Added
+
+- `POST /api/v1/patterns/preview-export` returning ready / rejected counts plus per-id rejection reasons.
+- `POST /api/v1/patterns/submit-bundle` returning the downloadable bundle JSON. Includes `X-Bundle-Pattern-Count` and `X-Bundle-Rejected-Count` headers for the UI.
+
+### Fixed
+
+- **`POST /api/v1/community-patterns/sync` no longer returns 502 when the upstream manifest URL doesn't exist yet.** A 404 from `raw.githubusercontent.com` (e.g. the patterns feature is still on a branch and `main` doesn't have `patterns/community/index.json`) now returns 200 with `{status: "no_manifest_yet"}`. Other failures still surface as 502. Caught from the user's console showing six 502s.
+- **`apiRequest` no longer stringifies error response bodies as `[object Object]`.** Backend 4xx responses can be `{error: {message: "...", reasons: [...]}}`; the old throw passed that object verbatim into `new Error(...)`. `extractErrorMessage` now prefers `error.error.message`, falls back to a stringified `error.error`, then the HTTP status. Affects every API call site.
+
+## [2.4.4] - 2026-05-15
+
+### Added
+
+- **Bulk submit-to-community in the Export dialog.** The per-pattern "Submit to community" buttons on the Patterns page are gone. The Export button now opens one dialog with a destination radio: Download as JSON (the existing flow) or Submit to community (opens one prefilled PR per selected pattern). Patterns whose source is already `community` are filtered out automatically; round-tripping them is pointless.
+- **Remove all community patterns.** Settings -> Community Patterns has a destructive action that wipes every `source='community'` row on this instance, including any you marked Protect from sync. Local and imported patterns are untouched. If sync is enabled, the next tick repopulates from the manifest. API: `DELETE /api/v1/community-patterns/all`, returns `{deleted: N}`.
+- **Single-pattern check in the PR validator.** Community submissions must describe one ad. The validator now rejects a PR if `text_template` mentions any other seed sponsor by name or alias. Closes the gap on the import side; the export side already had the same check. See `patterns/CONTRIBUTING.md`.
+- **Seeded `patterns/community/` with 12 initial patterns** (Capital One, Carvana x2, Instacart, Kayak, Mint Mobile, Monday.com, Progressive, SimpliSafe, Squarespace, ThreatLocker, Zyn). Pulled from a real instance export, cleaned up by hand, now in the published manifest. Earlier instances on this version pick them up on the next sync tick.
+
+## [2.4.3] - 2026-05-14
+
+### Fixed
+
+- **Fingerprint slow-fallback no longer burns 10 minutes when the audio is bad for fpcalc.** When `_generate_full_fingerprint` fails (e.g. fpcalc rejects an MP3 with "Invalid data found when processing input"), the per-window fallback used to inherit the full 600-second timeout — every window scan also called fpcalc, almost always produced zero new matches, and ate the entire budget before timing out. The fallback now caps at 90 seconds via a new `FALLBACK_SLOW_TIMEOUT` constant. Stage 1 still tries; it just doesn't block Stage 2 + Stage 3 for ten minutes on broken audio. Caught from production logs (cordkillers-only-audio episode that took 14 min on pass 1 alone).
+- **`processing_timeouts._resolve` was silently falling back to env / defaults every refresh tick.** The `from database import get_database` import is invalid — `get_database` lives in the `api` package — and the try/except swallowed the resulting ImportError. Fixed the import path. Effect: user-configured `processing_soft_timeout_seconds` / `processing_hard_timeout_seconds` are now actually read from the DB instead of being silently shadowed by env-var fallbacks.
+- **`community_sync` no longer WARNs every 15 minutes when the manifest URL returns 404.** A 404 is the expected state when upstream hasn't published a manifest yet (e.g., the feature branch hasn't merged to main). Now logged at INFO level with an explanatory message. Non-404 fetch failures still log as WARNING so real problems stay visible.
+- **`set_podcast_tags` short-circuits the episode-aggregation pass when the incoming RSS tags are already covered by the row's union.** Pre-fix: every feed refresh on a 300-episode podcast did one SELECT + 300 JSON parses across all episodes even when nothing was going to change. Now a single subset check before the heavy work. Materially lower SQLite write contention with the queue processor on instances with large feeds.
+
+## [2.4.2] - 2026-05-14
+
+### Fixed
+
+- **Reviewer-trim now actually trims** instead of rebuilding the template from one episode's transcription. `rewrite_pattern_from_bounds` takes the original AND new bounds, computes the head/tail transcript slices, and splices them out of the existing `text_template` only when they appear at its start/end. The earlier behavior (Operation 2 "full replace within threshold") was a misnomer — it fit the template to a single episode and risked breaking matches on episodes that had captured the cleaner version. `intro_variants` / `outro_variants` get the same prefix/suffix trim so they stay aligned. Returns False when neither head nor tail slice matches the existing template, leaving the pattern untouched.
+- **`community_sync.apply_manifest` now reads `manifest['vocabulary_version']`.** When the manifest carries a vocabulary newer than the app's, the sync writes a warning to the log and a `vocabulary_warning` field into `community_sync_last_summary` so the operator can spot a stale image. Non-integer values are caught and logged cleanly instead of crashing the sync.
+- **Hardcoded `ttlequals0/MinusPod` is now a single constant.** `GITHUB_REPO` and `COMMUNITY_MANIFEST_URL` live in `src/utils/community_tags.py`; the export pipeline and sync job both import from there. One source of truth for the upstream identity.
+- **`MANIFEST_VERSION` and `VOCABULARY_VERSION` moved out of `src/tools/generate_manifest.py`** (a build-time CLI) into `src/utils/community_tags.py` next to the vocabulary loader. Both the generator and the sync job import from there. Removes a wrong-direction runtime → build-time layering import.
+- **`pattern_service.py` no longer imports from `api/`.** Switched the transcript helper to `from utils.text import extract_text_in_range` directly. Service layer importing from API layer was the wrong dependency direction and would have become a circular import.
+
+### Added
+
+- **`.github/workflows/labeler.yml`** wiring `actions/labeler@v5` to apply `.github/labeler.yml` on PRs. The path-glob for `pattern` existed since 2.4.0 but nothing invoked it — community-pattern PRs will now get the label automatically.
+
+## [2.4.1] - 2026-05-14
+
+### Added
+
+- **Per-feed tag editor.** New "Tags" card on every feed-detail page. Shows the effective tag set grouped by source (RSS / episode / user), with an "+ Add tag" button that opens a grouped picker of the remaining vocabulary tags. User-added tags carry an inline X to remove them, and saves are auto-applied via `PUT /api/v1/feeds/{slug}/tags`. This was the missing companion UI to the backend endpoint shipped in 2.4.0.
+- **Multi-select pattern export.** The Patterns page **Export** button now opens a dialog with a checkbox per pattern (Select-all, optional include-disabled / include-corrections flags) instead of dumping the whole local pattern DB. `GET /api/v1/patterns/export` gained an `?ids=1,2,3` filter to support this.
+- **Per-row Submit-to-community / Protect-from-sync buttons in the desktop pattern table.** Previously only the mobile card layout had these — desktop reviewers had to switch viewports. New 9th "Actions" column hosts them.
+- **`GET /api/v1/tags/vocabulary`** — returns the canonical 49-tag vocabulary plus per-tag descriptions, grouped into podcast_genres / sponsor_industries / special_tags. Used by the new tag picker.
+
+### Changed
+
+- Tag vocabulary loading is now cached (`utils.community_tags.vocabulary_payload` with `@lru_cache(maxsize=1)`); the CSV is parsed once at process start instead of per request. Frontend cache: `staleTime: Infinity` since vocabulary ships with the app image.
+- `/tags/vocabulary` lives at `src/api/tags.py` (was inline in `sponsors.py`); no behavior change, better discoverability.
+- TypeScript now exports `PATTERN_SOURCES` and `PatternSource` from `frontend/src/api/patterns.ts`, mirroring the Python `PATTERN_SOURCES` frozenset — frontend and backend can no longer drift on source-discriminator spellings.
+
+### Fixed
+
+- **`community_sync.apply_manifest` version stamping**: was using `dict.setdefault('version', manifest_version)` which silently kept a stale `version` carried in the inner `data` dict. Now assigns unconditionally so the manifest's version is authoritative for the `import_community_pattern` version gate.
+- **CodeQL py/reflective-xss in bulk-op endpoints**: hardened `_resolve_bulk_target` so `ids` and `expected_count` are coerced to integers up front. Non-integer payloads return 400 with a clean message instead of being f-stringed into the response body.
+- **Inline CREATE TABLE shape drift**: `_create_new_tables_only` definitions for `ad_patterns` and `known_sponsors` were missing the 2.4.0 columns; brought back into sync with `SCHEMA_SQL`. End state was already correct via the ALTER TABLE migrations, but the "must match SCHEMA_SQL exactly" comment invariant is now true again.
+- **Sponsor reseed migration order**: moved `_reseed_known_sponsors` to run AFTER `_migrate_sponsor_fk` and the Zyn cleanups so it operates on the post-dedup canonical state. Previously a v2.1.x → 2.4.x jump could let dedup discard the freshly-tagged row.
+
+## [2.4.0] - 2026-05-14
+
+### Added
+
+- **Community ad patterns.** Patterns can now be shared via the `patterns/community/` directory in the GitHub repository. A new "Submit to community" button on each local pattern row runs an export pipeline (quality gates, PII strip, sponsor classification, metadata strip) and opens a prefilled GitHub PR. A new GitHub Action validates incoming PRs against the same gates and a three-tier dedupe (95%+ duplicate, 75–95% variant, <75% distinct) before the maintainer reviews them.
+- **49-tag vocabulary + tagging system.** Sponsors and podcasts now carry tags from a 48-entry vocabulary (`src/seed_data/tag_vocabulary.csv`) plus a special `universal` flag for sponsors with broad appeal. Community patterns only enter the text-matching loop when their sponsor's tags overlap the podcast's tags, when the sponsor is `universal`, or when either side has no tags. Local patterns bypass tag filtering entirely.
+- **Authoritative sponsor seed.** A new schema migration loads 255 sponsors (with aliases and tags) from `src/seed_data/sponsors_final.csv`. Migration semantics: UPDATE on name match (preserves `ad_patterns.sponsor_id` FKs), INSERT new, soft-delete (`is_active=0`) any pre-existing sponsor whose name is not in the seed.
+- **Auto-pull / sync.** Optional opt-in: when enabled, the server polls `https://raw.githubusercontent.com/ttlequals0/MinusPod/main/patterns/community/index.json` on a configurable cron (default Sunday 3am UTC) and applies INSERT / UPDATE / DELETE against community patterns. The new "Protect from sync" toggle on each community pattern row pins it so a future manifest can't overwrite or delete it.
+- **Reviewer-trim auto-rewrite.** When a reviewer narrows an ad's bounds by more than the configurable trim threshold (default 20 s), the local pattern's `text_template` and intro/outro variants are re-extracted from the new transcript bounds. Off by default for community patterns; toggleable in the new **Ad Reviewer** settings panel.
+- **iTunes category parsing.** RSS feed refresh now extracts `<itunes:category>` at both podcast and episode level and maps it through `src/seed_data/itunes_category_map.json` to the vocabulary tags above.
+- **API additions** under `/api/v1/`: `POST /patterns/bulk-delete`, `POST /patterns/bulk-disable` (both guarded by `confirm: true` + `expected_count`), `POST /patterns/{id}/submit-to-community`, `POST | DELETE /patterns/{id}/protect`, `GET | PUT /feeds/{slug}/tags`, `PUT /sponsors/{id}/tags`, `GET | PUT /settings/reviewer`, `GET | PUT /settings/community-sync`, `POST /community-patterns/sync`, `GET /community-patterns/sync-status`. Documented in `openapi.yaml` (now at version 2.4.0).
+- **Frontend additions.** Patterns page gains an Import/Export header pair, a Source filter (Local / Community / Imported), a community badge on each community-sourced row, per-row Submit-to-community / Protect-from-sync buttons, and a last-synced indicator with manual refresh. Settings page gains two new sections: **Ad Reviewer** (toggle + threshold) and **Community Patterns** (enable, cron, Sync Now, last-sync display).
+- **GitHub workflow + path labeler** for community PRs (`.github/workflows/validate-community-patterns.yml`, `.github/labeler.yml`). Validator is also a CLI: `python -m tools.community_pattern_validator --pr-files X.json Y.json --comment-output /tmp/comment.md`.
+
+### Changed
+
+- `known_sponsors`, `podcasts`, `episodes` now carry a JSON `tags` column; `ad_patterns` carries `source`, `community_id`, `version`, `submitted_app_version`, `protected_from_sync`. Migration is additive and idempotent.
+- Editing a community pattern in the UI now auto-sets `protected_from_sync=1` so the next sync run doesn't clobber the edit.
+
+## [2.3.4] - 2026-05-13
+
+### Fixed
+
+- **Jump button opened the wrong ad.** The button only set the audio seek position; the modal still rendered whichever ad was at `editorSelectedAdIndex` (defaulting to 0). The fix passes the row's index alongside the seek time. As a regression guard, `modalKey` in `AdEditor` now also includes `selectedAdIndex`, so the modal remounts when the index changes.
+
+## [2.3.3] - 2026-05-13
+
+### Changed
+
+- **Made the play scrubber actually look like a scrubber.** 2.3.2 shipped a thin tan rectangle that didn't read as interactive. Now: bordered track, primary-color playback fill, a circular thumb at the playhead position (scales on hover/focus), taller bar (`h-3`) for easier click/touch targeting, window indicator demoted to a muted gray band so it doesn't compete with the playback fill.
+
+## [2.3.2] - 2026-05-13
+
+### Changed
+
+- **Edit Ads now defaults to a small window around the detected ad again** (±30s context, capped at 360s). 2.3.1 made every open default to the full episode, which lost the boundary-detail view that made review-mode useful in the first place. Create-new-ad still defaults to the full episode. If the user types a far-away timestamp in review mode, the window auto-expands to include the new pin.
+
+### Added
+
+- **Full-episode play scrubber** under the zoom slider. Click or drag anywhere on the bar to jump to that point in the audio, regardless of how the waveform is zoomed. Two overlapping fills: a dim band shows the slice currently rendered in the waveform; a brighter fill tracks playback. Keyboard: Arrow keys seek ±5s, Shift+Arrow ±10s, Home/End jump to ends. Pointer move is rAF-coalesced so dragging doesn't thrash the audio element.
+
+## [2.3.1] - 2026-05-13
+
+### Fixed
+
+- **Ad editor waveform defaulted to a 6-minute view**, so on long episodes the pins jumped off-screen the moment you typed real timestamps. Default now spans the full episode. When zoomed in, typing a time outside the viewport scrolls the wavesurfer to bring the pin into view.
+- **Time inputs auto-reset on blur** when Start > End, blocking you from typing Start=34:50 then End=37:20. Each input now clamps only to `[0, episodeDuration]`. Cross-field validation moves to Save: invalid selection disables Save, reds the inputs, and shows an inline error.
+- **No playback speed control** in the ad editor. Added a 0.5×–2× dropdown next to the play button.
+
+### Changed
+
+- Trimmed the helper text on the "LLM Tunables (per stage)" Settings section.
+
+## [2.3.0] - 2026-05-13
+
+### Added
+
+- **Per-stage LLM tunables (#222).** Temperature, max_tokens, and reasoning controls per pass: ad detection (pass 1), reviewer, verification (pass 2), chapter boundary detection, and chapter title generation. The reviewer uses one set of values across both of its invocations. Reasoning is provider-aware — Anthropic takes a numeric token budget (1024-65536) that maps to the `thinking` block; OpenAI, OpenRouter, and Ollama take an effort enum (`none`, `low`, `medium`, `high`). Budget and level live in separate DB keys so a value set on one provider survives switching to another and back.
+- **4xx fallback on rejected tunables.** When the provider returns 4xx because the user's values don't fit the model, the call is logged at WARNING and retried once with built-in defaults. The flag is keyed by `(episode_id, pass_name)` so parallel episodes don't share state. It clears at the start of the next pass.
+- **Ollama context window (`OLLAMA_NUM_CTX`).** Ollama defaults to a small context (often 2048) and silently drops prompt text that doesn't fit, so ad detection fails with no visible error. Setting this to the model's trained context limit (8192+) avoids that.
+- Env vars for every tunable; setting one makes the matching control read-only in Settings with a note pointing at the variable. Full list in `.env.example`.
+- OpenAPI: 21 new fields on the `/settings/ad-detection` PUT payload and the Settings GET response.
+
+### Changed
+
+- Settings key `ad_detection_max_tokens` is migrated to `detection_max_tokens` on first startup. The old `AD_DETECTION_MAX_TOKENS` env var still works as an alias for `DETECTION_MAX_TOKENS`.
+
+### Internal
+
+- New module `src/llm_capabilities.py` for per-pass fallback state, the defaults registry, and provider-aware reasoning translation. Pulled out of `llm_client.py` so the client stays focused on the SDK plumbing.
+- `LLMClient.messages_create` gains `reasoning_effort`, `episode_id`, and `pass_name`. Both `AnthropicClient` and `OpenAICompatibleClient` handle the fallback retry inline (the request shapes differ enough that sharing the body is more confusing than helpful).
+- Stage modules (`ad_detector`, `ad_reviewer`, `chapters_generator`) call `config.get_stage_tunable` at request time so a Settings UI change takes effect on the next episode without restarting the worker.
+
+## [2.2.12] - 2026-05-13
+
+### Fixed
+
+- **Truncated LLM responses now salvage usable ad verdicts instead of failing open (#221).** `extract_json_ads_array` already calls `_salvage_truncated_single_ad` as a final fallback when a model runs out of token budget mid-response, but the salvage helper required the body to start with `{`. Both the detector and the opt-in reviewer prompt for an array of ad verdicts, so truncation lands inside the first object with `[` at the head, and the salvage path was being skipped. The helper now strips a leading `[` before its `startswith('{')` guard, letting the existing regex recover `start`/`end`/`reason` from the partial body. Benefits both code paths (detector and reviewer) via the shared helper.
+
+## [2.2.11] - 2026-05-13
+
+### Changed
+
+- `REVIEW_MAX_TOKENS` raised from 1024 to 4096 and made env-overridable via `REVIEW_MAX_TOKENS`, matching the `AD_DETECTION_MAX_TOKENS` default and override path. The single-ad LLM response cap is now consistent with the broader detection cap; smaller models with chatty JSON envelopes were occasionally getting truncated at 1024.
+
+### Fixed
+
+- **Zyn cascade cleanup extended to per-marker frozen data.** 2.2.10 cleaned up `ad_patterns.sponsor_id`, but the editor reads each ad's sponsor from `episode_details.ad_markers_json` where the value was frozen at detection time. Episodes detected during the 2.2.7-2.2.9 window kept showing `Zyn` after the 2.2.10 deploy. Added a one-shot startup migration that scans every episode's `ad_markers_json`, finds markers with `sponsor='Zyn'`, extracts the actual transcript text for the marker's `[start, end]` window via `extract_text_in_range`, and clears `sponsor` (plus strips `Zyn` from the `reason` string) when the canonical brand is not present in the window. Idempotent and conservative: only markers whose detected audio does NOT contain Zyn are touched.
+
+## [2.2.10] - 2026-05-13
+
+### Fixed
+
+- **Sponsor name no longer falsely resolves to Zyn on unrelated ads.** The 2.2.7 Zyn seed added `Zin` and `Zinn` as aliases. The startup `extract_sponsors_for_patterns` backfill matched those aliases against every ad pattern's transcript and overwrote `sponsor_id` to the Zyn row whenever it found a word-boundary hit, including transcripts that mention Howard Zinn or unrelated brand mentions. The result was that every ad opened in the editor showed "Zyn" as the sponsor. Three changes:
+  - Drop the `Zin` alias from the Zyn seed; keep `ZYN` and `Zinn`.
+  - The pattern-level sponsor backfill now requires the canonical sponsor name (not just an alias) to appear as a whole word in the text before writing `sponsor_id`. Aliases on their own are no longer enough confidence for an automatic write.
+  - One-shot startup migration clears `sponsor_id` on every pattern currently pointing at the Zyn row whose `text_template` does not contain `Zyn` as a whole word. Idempotent: only fires for the contaminated rows, only clears when the canonical brand is absent.
+
+## [2.2.9] - 2026-05-13
+
+### Fixed
+
+- **Playback starts at the ad, not at episode origin.** When the user clicked Play on a review-mode editor for a mid-roll or post-roll ad, audio was starting at `0:00` because of a race between the `loadedmetadata` seed and the user's Play click. `togglePlay` now snaps the cursor to `adStart - 2` if the cursor is parked far before the visible window. The seed effect's stale `currentTime < 0.1` guard is removed (the togglePlay safety net handles the race) and `audioUrl` is added to the seed effect's deps so toggling Processed ↔ Original re-seeds the cursor.
+
+## [2.2.8] - 2026-05-13
+
+### Fixed
+
+- **Closing the new-ad modal no longer "leaves a second popup behind".** The 2.2.6 sync useEffect was overriding the user's Cancel — `handleClose` set `internalCreateMode = false`, the modal flipped to review for a frame, then the effect re-imposed `createMode = true` from the parent prop and flipped it back to create. The user perceived this as a stacked review modal appearing under the create form. `handleClose` now tracks whether create mode was entered via the in-modal `+ Add new ad` (returns to review) vs the page-header button (closes entirely). The sync useEffect is now one-way: it only flips into create mode on a fresh prop transition, never overrides an internal close.
+- **Sponsor autocomplete dropdown now has an opaque background.** Swapped `bg-popover` (`--popover` was never defined in the theme, so it resolved to transparent) for `bg-card`, plus `z-20` and `shadow-lg` so the dropdown reads as a popover above the form fields.
+- **Waveform colors follow the active theme.** Wavesurfer's `waveColor` and `progressColor` are now read from the `--muted-foreground` and `--primary` CSS variables at mount time, so switching themes (Slate, Dracula, Catppuccin, Nord, etc.) updates the waveform palette on next open.
+
+## [2.2.7] - 2026-05-12
+
+### Added
+
+- **Real sponsor autocomplete in create mode.** New `SponsorInput` combobox component renders the dropdown inside the React tree so a suggestion click stays within the modal panel (the old `<datalist>` browser-native popup escaped the modal and dismissed the editor). Includes a `+ Add new: <typed>` option when no exact match.
+- `Zyn` sponsor seed with `Zin` / `Zinn` aliases (Whisper mishears).
+
+### Changed / Fixed
+
+- **Manually-created ads now display sponsor + reason on the page row.** Backend synthesizes a `<sponsor>: manually added ad` reason when the user leaves Reason blank; frontend adds a sponsor chip alongside the time range and a `Manual` (amber) detection-stage badge.
+- **Modal can no longer be dismissed accidentally.** Backdrop close switched to `onMouseDown` with an `e.target === e.currentTarget` guard, so only clicks on the bare backdrop area trigger close. In create mode, backdrop close is disabled entirely — the user must use Cancel or X to dismiss a form they're filling out.
+- **Diagnostic logs for reprocess.** Stage 2 (text pattern) now logs `considered N patterns, matched M`. Database init logs `Pattern catalog: ad_patterns active=N, known_sponsors active=M`. Lets us distinguish "Stage 2 had 0 patterns to consider" from "Stage 2 considered many but matched 0" from "Claude returned 0".
+
+### PWA
+
+- `skipWaiting: true` + `clientsClaim: true` on the Workbox config. New deploys take over open tabs on next page load instead of waiting for all tabs to close.
+
+## [2.2.6] - 2026-05-12
+
+### Fixed
+
+- **Crash after `Save & Next` on a create-ad submission.** `getAdCorrection` at `EpisodeDetail.tsx:180` dereferenced `c.original_bounds.start` for every correction in the list. `'create'` corrections legitimately have `original_bounds=null` (no original bounds for a brand-new marker), so the first one to land after the new correction posted crashed the page with `TypeError: Cannot read properties of null (reading 'start')`. Added a null guard on the find predicate.
+- **Transcript text now refreshes when the user moves a pin in create mode.** Dropped the "only when empty" guard on the `/transcript-span` auto-fill effect. The text template is meant to be derived from the current window, so the fetch now always overwrites the field; manual edits get clobbered when the user drags a pin (acceptable trade-off — see follow-up note in plan).
+- **`+ Add new ad` from a review-mode modal no longer bleeds review state into the create form.** AdEditor now sets a `key` prop on `<AdReviewModal>` that changes on mode flip and on ad switching, forcing React to remount the modal so all `useState` hooks re-initialize from the `defaults` useMemo cleanly.
+
+### Changed
+
+- Window-times row in the modal header now reads `Window: 0:00.0 – 4:02.1` instead of two unlabeled numbers flanking the checkbox + Reset button.
+
+## [2.2.5] - 2026-05-12
+
+### Changed / Fixed
+
+- **Editable selection timestamps.** The Selection readout was static text on 2.2.0-2.2.4 even though the original plan called for editable inputs. The green start time and red end time are now controlled inputs that accept `MM:SS[.s]`, `H:MM:SS[.s]`, or raw seconds. Commit on blur or Enter, revert on Escape, clamped to `[0, episode_duration]` with `start + 1s <= end`. Pin drag still updates them live.
+- **Dropped the `+/-1m` window-extent buttons from the modal header.** They were a verbatim lift from PR #204 and the original 2.2.0 plan explicitly dropped them. The keyboard shortcuts `,` and `.` still expand the window; the pin handles still set the ad boundaries. The strip now shows only the window time labels, the `Play audio while dragging pin` checkbox, and the Reset button.
+- **`+ Add new ad` from the page header now flips an already-open editor into create mode.** Re-added the `useEffect` that syncs the internal `createMode` state when the prop changes (was removed in 2.2.1 to satisfy `react-hooks/set-state-in-effect`; the lint is wrong here, so the rule is disabled on that one line with a comment explaining why).
+- **Modal backdrop now hides the page chrome.** Swapped `bg-black/50` for `bg-background/95 backdrop-blur-sm` so the underlying `Detected Ads` list no longer shows through when the editor is open.
+
+## [2.2.4] - 2026-05-12
+
+### Fixed
+
+- **`Detected Ads (N)` header buttons no longer wrap on mobile.** `Edit Ads` and `+ Add new ad` are now icon-only on the default breakpoint (with `aria-label` + `title` for accessibility) and pick up their text labels at `sm:` and up. Tighter `px-2` + `gap-1.5` + `text-xs` keep everything on a single row even when the count goes into double digits.
+
+## [2.2.3] - 2026-05-12
+
+### Fixed
+
+- **Modal header truncated the title to `D.`** on narrow viewports. The `h2` had `flex-1 truncate` next to a flex-row of action chips, so when the chips occupied most of the width the title compressed to its first letter. The title is now `hidden sm:block` (the metadata row below already identifies the editor; the title is decorative on mobile), and the chrome no longer fights for space.
+- **`+ Add new ad` button wrapped to a second row on mobile.** It is now icon-only on the default breakpoint (`+` plus screen-reader label) and gains the `Add new ad` text on `sm:` and up.
+- **Bottom action bar overflowed.** Skip / Reject / Save buttons now show short labels on mobile (`Skip`, `Reject`, `Save`) and the full `& Next` suffix only on `sm:` and up, with tighter gaps + padding so all three fit on a 360px viewport.
+- Reduced horizontal padding on the modal chrome (`px-4` mobile / `px-6` desktop) to give the waveform and action bar more usable width on phones.
+
+## [2.2.2] - 2026-05-12
+
+### Changed
+
+- **`+ Add new ad` now also lives on the `Detected Ads` page header** next to `Edit Ads`, so users can jump straight into create mode without first opening review mode.
+- **Modal header restructured.** Stage / Confidence / Pattern / Reason chips now sit on their own row below the title and the Processed/Original/Add-new/Close action chrome, which kept the chrome from wrapping awkwardly on narrow screens.
+- **Action bar buttons are equal-width and same-height** (`flex-1 basis-0 h-9` on mobile, fixed min-width on desktop). The `Save & Next` label no longer wraps to three lines and tower over its siblings.
+- **Renamed the primary action label** from `Save adjustment & next` to `Save & Next` (and `Save adjustment` to `Save` when there is no queue).
+
+## [2.2.1] - 2026-05-12
+
+### Fixed
+
+- **`+ Add new ad` was hidden behind the editor modal.** On 2.2.0 the button only existed on the page chrome behind the wavesurfer modal, so once you opened the editor you had no way to reach create mode. Moved into the modal header alongside the close button.
+- **Processed / Original audio toggle was hidden behind the modal.** Same root cause. Moved the toggle into the modal header. Original is forced (and the toggle hidden) when the editor is in create mode, since you cannot mark a new ad against already-cut audio.
+- **Create mode now uses the same waveform editor.** The 2.2.0 create flow used a plain form with numeric start/end fields. 2.2.1 reuses `AdReviewModal` so the user can drag the start/end pins on the actual waveform, with the text template auto-populated from `/transcript-span` and editable inline.
+
+## [2.2.0] - 2026-05-12
+
+### Added
+
+- **Create-new-ad workflow.** Mark an ad on any episode the detector missed, directly from `EpisodeDetail`. Submits via the new `'create'` correction type on `POST /api/v1/episodes/<slug>/<episode_id>/corrections`. The new marker is inserted into `ad_markers_json` (sorted by start), a new `ad_patterns` row is created with `created_by='user'`, and a `pattern_corrections` row of type `'create'` is recorded for cross-episode learning.
+- **Waveform-based ad editor.** Replaces the prior plain `<audio>` + nudge-button `AdEditor` with a wavesurfer.js v7 editor. Draggable green/red pin handles, orange playhead with 1x-20x zoom, transport bar (SkipBack / Rewind10s / Play / Forward10s / SkipForward / Stop), live INSIDE AD / OUTSIDE AD indicator, mouse-wheel zoom, keyboard hotkeys (Space / C / R / S / arrows). Mobile layout drops keyboard hotkey hints and uses touch-only controls.
+- `GET /feeds/<slug>/episodes/<episode_id>/peaks?start=&end=&resolution_ms=` returns ffmpeg-derived waveform peaks for a window. Auto-coarsens the resolution for very long windows so the JSON payload stays under ~600 KB. Drives the new editor.
+- `GET /feeds/<slug>/episodes/<episode_id>/transcript-span?start=&end=` returns the transcript text spanning a window. Used by create mode to auto-populate the new pattern's `text_template`.
+- `Accept-Ranges: bytes` advertised on `serve_original_audio` so the wavesurfer player can seek without re-downloading.
+- Manual badge + Origin filter (All / Auto / Manual) on `PatternsPage` for patterns where `created_by = 'user'`.
+
+### Changed
+
+- **Sponsor normalization via FK.** `ad_patterns.sponsor` (free-text column) replaced with `ad_patterns.sponsor_id INTEGER REFERENCES known_sponsors(id)`. `pattern_corrections.sponsor_id` added (same FK target). All sponsor writes across `pattern_service`, `text_pattern_matcher`, `database/maintenance`, `api/patterns`, and the `PUT /patterns/<id>` endpoint now flow through a single sanitization chokepoint (`src/sponsor_normalize.get_or_create_known_sponsor`). Read paths JOIN `known_sponsors` and alias `name AS sponsor` so consumers don't change.
+- `pattern_corrections.correction_type` CHECK extended to include `'auto_promotion'` (latent bug; the auto-promotion writer at `pattern_service.py:708` was writing a value the constraint rejected) and `'create'`.
+
+### Migration
+
+- One-shot migration in `_run_schema_migrations` adds the new columns, deduplicates case-variant rows in `known_sponsors` (lowest id wins), snapshots the old `ad_patterns.sponsor` text into a backup table, backfills `sponsor_id`, verifies (`PRAGMA foreign_key_check` clean + row-count parity vs the snapshot), then drops the old text column and recreates `pattern_corrections` with the extended CHECK. Each step is idempotent. On verification failure, destructive steps abort and the new columns plus backup table remain in place so the user can re-run on the next restart.
+
+## [2.1.9] - 2026-05-11
+
+### Fixed
+
+- **PWA still blank on iOS after 2.1.8**. The 2.1.8 router migration was correct, but 2.1.8 also shipped React error #527 ("two React instances, version mismatch") because Dependabot PR #210 bumped `react` 19.2.5 -> 19.2.6 without also bumping `react-dom`. The 2.1.8 bundle ended up with `react@19.2.6` + `react-dom@19.2.5`, which throws on app init. Fix bumps `react-dom` to `^19.2.6` so both packages move together. Verified the rebuilt 2.1.9 bundle contains only the `19.2.6` version string.
+
+## [2.1.8] - 2026-05-11
+
+### Security
+
+- Bump `urllib3` 2.6.3 -> 2.7.0 to clear CVE-2026-44431 and CVE-2026-44432 (both HIGH). Pulled in as a transitive of `requests`. Pinned in `requirements.in` so future `pip-compile` runs don't drift back.
+
+### Fixed
+
+- **iOS PWA blank screen on 2.1.7**. The 2.1.7 bump of `react-router-dom` 6.30.3 -> 7.15.0 broke `<BrowserRouter basename="/ui">` initialization under iOS WKWebView. Desktop browsers rendered fine; the installed iOS PWA loaded the bundle but rendered an empty `<div id="root">`. Fix migrates `frontend/src/App.tsx` from the v6 `<BrowserRouter>` + `<Routes>` + `<Route>` shape to v7's `createBrowserRouter([...], { basename: "/ui" })` + `<RouterProvider>` data-router shape. All page hooks (`useNavigate`, `useParams`, `useLocation`, `useSearchParams`, `Outlet`, `Link`, `Navigate`) are unchanged between v6 and v7, so no call sites were touched.
+
+### Changed
+
+- Benchmark docs now disclose how the corpus transcripts were produced. `benchmarks/llm/README.md` has a new "Transcript source" section listing the faster-whisper `large-v3` config, the exact `model.transcribe()` parameters (`beam_size=5`, adaptive `batch_size`, `word_timestamps=True`, `vad_filter=True` with custom `vad_parameters`, forced `language="en"`, and the sponsor-vocabulary `initial_prompt`), and a sample of `SEED_SPONSORS`. `benchmarks/llm/data/README.md` has a short pointer paragraph at the top. The generated `results/report.md` now contains a "Transcript source" section between "Methodology" and "Run Metadata" with the full sponsor list (254 entries) pulled lazily from `src/utils/constants.SEED_SPONSORS` at report time.
+- Full humanizer pass on `benchmarks/llm/README.md`, `benchmarks/llm/data/README.md`, `benchmarks/llm/CONTRIBUTING.md`, and prose strings in `benchmarks/llm/src/benchmark/report.py`. All ASCII pseudo-em-dashes (` -- `) replaced with sentence breaks, semicolons, or colons depending on context. No Unicode em/en-dashes, smart quotes, bullets, or ellipsis chars in any benchmark doc.
+
+## [2.1.7] - 2026-05-10
+
+### Added
+
+- LLM parser strategy 4: salvage a single-ad dict from responses that ran out of token budget mid-output. Triggered after the existing four strategies fail on structurally invalid JSON (no closing brace, unclosed string). Regex-extracts the numeric fields (`start`, `end`, `confidence`, `*_time`, `*_seconds`) and partial string fields (`reason`, `sponsor`, `advertiser`, `end_text`, `description`), returning the dict only when both `start` and `end` were recovered. Observed on Microsoft phi-4 in the offline benchmark; production hits this when a model emits a verbose `reason` field and saturates `AD_DETECTION_MAX_TOKENS`. Extraction method label: `json_object_single_ad_truncated`.
+
+### Changed
+
+- Benchmark `max_tokens` is now config-driven via `[run].max_tokens` in `benchmark.toml`, defaulting to production's `AD_DETECTION_MAX_TOKENS` so the benchmark matches the live app's budget by default. Reasoning models that need more headroom can override locally without touching production config.
+- Benchmark `schema_audit` now imports production's `STRUCTURAL_FIELDS` and `SPONSOR_PRIORITY_FIELDS` to stop flagging fields the live parser already accepts (`end_text`, `sponsor`, etc.) as `extra_keys`. Prior runs reported ~9,898 spurious violations on those two field names alone.
+- Benchmark code-quality cleanup: removed local duplicates of `parse_timestamp` and `format_time` in favor of `utils.time`; replaced hand-rolled `_violations_dict` with `dataclasses.asdict`; converted derived `ModelStats` fields (`cost_per_tp`, `tokens_per_detected_ad`) to `@property`; precomputed per-model indexes in `_aggregate` and per-model call counts in `_render_failures`; cached `avg_f1` and `mean_f1_stdev` on `ModelStats`; tightened the HTTP-5xx error classifier to use `\b5\d{2}\b` instead of fragile substring matching; extracted `_length_bucket` and `_position_bucket` helpers from inline ternaries.
+
+### Security
+
+- **Accepted CVE (no fix available)**: CVE-2026-31431 in `linux-libc-dev` (HIGH). The package provides kernel ABI headers from the ubuntu 24.04 base; it is used only at build time and not loaded at runtime. There is no upstream patch as of release. Both `2.1.7` and `2.1.7-cpu` images carry the same finding; it goes away when ubuntu publishes the fixed kernel-headers package.
+
+### Dependencies
+
+- bump anthropic 0.97.0 -> 0.100.0
+- bump cryptography 47.0.0 -> 48.0.0
+- bump gunicorn 25.3.0 -> 26.0.0
+- bump huggingface-hub 1.13.0 -> 1.14.0
+- bump openai 2.33.0 -> 2.36.0
+- bump @tanstack/react-query 5.100.5 -> 5.100.9 (frontend)
+- bump react 19.2.5 -> 19.2.6 (frontend)
+- bump react-router-dom 6.30.3 -> 7.15.0 (frontend; major upgrade, no API surface change needed in this app)
+- bump tailwind-merge 3.5.0 -> 3.6.0 (frontend)
+- bump vite-plugin-pwa 1.2.0 -> 1.3.0 (frontend dev)
+- bump node 24-alpine -> 26-alpine (Dockerfile frontend builder, both GPU and CPU images)
+- holding ubuntu 24.04 -> 26.04 (Dependabot PR #208) until nvidia/cuda ships a 26.04 base; the GPU image is pinned to ubuntu 24.04 through `nvidia/cuda:12.9.1-runtime-ubuntu24.04`, so taking it now would split the GPU and CPU base images across a major OS version.
+
+## [2.1.6] - 2026-05-09
+
+### Changed
+
+- Reviewer "boundaries unchanged" tolerance dropped from 0.5s to 0.1s. The previous floor was hiding any sub-second corrections the LLM was proposing by rounding them to `confirmed`. With the tighter floor, genuine half-second boundary tweaks now surface as `adjust` verdicts in the audit log so the distribution is visible.
+- Added an INFO-level log line for every non-zero LLM-proposed boundary shift, including ones that round to `confirmed`. Format: `Reviewer @ A-Bs proposed delta start=+X.XXs end=+Y.YYs (rounded to confirmed | applied as adjust)`. Lets us see whether the LLM is consistently echoing original boundaries or proposing shifts that the floor was masking.
+
+## [2.1.5] - 2026-05-09
+
+### Fixed
+
+- Reviewer mutations were not persisting to `ad_markers_json` when pass 2 reviewer rejected all verification ads (`v_ads_for_ui` empty). The downstream save in `process_episode` was gated on `if v_ads_for_ui:`, so when pass 2 cleared the list, the pass 1 reviewer fields the user saw in logs (`Reviewer pass 1 verdicts: 4 confirmed, 0 adjusted, 2 rejected, ...`) never made it into the persisted ad markers. UI showed no per-segment reviewer indicators because the data wasn't there. `_run_ad_reviewer` now calls `storage.save_combined_ads` itself after applying verdicts so persistence is self-contained and not coupled to pass 2 outcomes.
+- Settings -> Experiments -> Ad Reviewer: the Review model dropdown only listed the literal "Same as pass model" sentinel and offered no concrete model choices. `Settings.tsx` was never passing `modelOptions` to `ExperimentsSection`, so the prop fell back to its empty default. Now wires the same `models` query result that `AIModelsSection` consumes (mapped through `formatModelLabel` for display parity with the existing Detection / Verification / Chapters dropdowns).
+
+## [2.1.3] - 2026-05-09
+
+### Added
+
+- Reviewer stage in the global status bar. The pipeline now emits `pass1:reviewing` (75%) and `pass2:reviewing` (90%) status updates when the reviewer is actually running, so the user no longer sees the bar stuck on the previous stage during the ~1-2 minute reviewer block. Frontend `STAGE_LABELS` carries matching "Pass 1: Reviewing detections" / "Pass 2: Reviewing detections" labels.
+- Per-segment reviewer verdict badges on the episode detail page. Every reviewer-touched ad now carries an explicit pill: green "Reviewer: confirmed", cyan "Reviewer: adjusted", amber "Reviewer: resurrected", red "Reviewer: rejected", or gray "Reviewer: skipped" (the LLM call failed and the original detection was kept). Tooltips surface `reviewer_reasoning` on hover when present. The bare "Source: Reviewer" tag in the rejected detections list is replaced by the verdict-specific badge.
+- Pass 2 reviewer verdict summary log line. `_apply_pass2_reviewer` now emits the same `Reviewer pass 2 verdicts: X confirmed, Y adjusted, Z rejected, ...` summary that `_run_ad_reviewer` already emitted for pass 1.
+
+### Changed
+
+- The Ad Reviewer Stats card on the Stats page now renders whenever the `/stats/reviewer` query has loaded, not only when `totalReviews > 0`. When zero, the card displays a hint pointing the user to Settings, Experiments to enable the reviewer.
+
+## [2.1.2] - 2026-05-09
+
+### Fixed
+
+- Reviewer was still failing parse on every LLM call after 2.1.1: production stats showed 16/16 reviews returned failure. Root cause was prompt architecture, not parsing. The reviewer asked for a flat single-object output (`{verdict, reasoning, confidence}`) with structured user-prompt fields (`DETECTED AD: Start: X, End: Y, Sponsor: Z`), which invited the LLM to invent its own schema (`detected_ads: [...]`, `ad_segment: {...}`, `is_ad: bool`, etc.) instead of emitting the requested verdict object. Pass 1 / pass 2 detection do not have this problem because they emit a JSON array of `{start, end, confidence, reason}` objects, which is a familiar extraction shape every LLM handles consistently.
+- Reviewer now mirrors detection's prompt and parser. Output is a JSON array of ad segments, parsed by the same `extract_json_ads_array` helper detection uses. Empty array means reject; one element means keep, with verdict (confirmed / adjust / resurrect) derived from the boundary delta vs the original (within 0.5s tolerance is treated as confirmed; shifted within the cap is adjust; resurrection-pool returns map to resurrect or reject).
+- Provider-neutral fix. Works on Anthropic, OpenAI-compatible, OpenRouter, and Ollama backends since they all already emit array JSON for detection. No tool-call API used.
+- The user prompt drops the labeled `DETECTED AD: Start: X, End: Y, Sponsor: Z` block that was inviting the LLM to mirror with structured analysis. Replaced with the same minimal `Podcast / Episode / description / Transcript` shape detection uses, with the candidate ad called out inline via `>>> CANDIDATE AD START >>>` markers in the transcript.
+- Schema migration v2.1.2 refreshes default-flagged `review_prompt` and `resurrect_prompt` rows to the new array-output prompts. User-customized prompts are left alone (matches the existing v1.0.x prompt-refresh pattern).
+
+### Removed
+
+- `_VERDICT_NORMALIZATION` map, `_apply_adjust` helper, and the cross-pool verdict-coercion logic from `src/ad_reviewer.py`. The verdict label is now derived from the array shape, so synonyms / case variations / wrap-recovery are not needed.
+
+## [2.1.1] - 2026-05-09
+
+### Fixed
+
+- Ad reviewer was hitting the unparseable-response failure path on every LLM call in 2.1.0. Two root causes, both fixed:
+  - `AdReviewer._extract_response_text` did not handle the case where `LLMClient.messages_create` returns an `LLMResponse` dataclass with `.content` already a string (rather than the Anthropic SDK's `[TextBlock]` list). It fell through to `str(response)`, which produced a Python repr containing literal `\n` escape sequences instead of real newlines, causing every downstream JSON parse to fail with "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)". The helper now handles `content` as a string directly.
+  - Even when text extraction worked, claude-sonnet-4-6 was wrapping verdicts in extra metadata fields (`podcast`, `episode`, `ads_reviewed: [...]`) despite the prompt asking for a flat object. The reviewer now walks the parsed value to find the first nested dict containing a `verdict` key (`utils.llm_response.find_first_dict_with_key`).
+- `DEFAULT_REVIEW_PROMPT` and `DEFAULT_RESURRECT_PROMPT` tightened to forbid wrapper objects explicitly (Output exactly one flat JSON object ... must start with `{` and end with `}` ... do NOT include podcast, episode, sponsor, ads_reviewed, results, summary, or any other field). Default-flagged rows refresh on next start via the existing v1.0.x prompt-refresh migration pattern; user-customized rows are untouched.
+
+### Added
+
+- 9 unit tests covering: `find_first_dict_with_key` traversal (top-level, nested-in-array, deeply nested, no-match, non-dict roots), and the reviewer end-to-end with the LLMResponse-dataclass shape, with extra-top-level-fields, and with the `ads_reviewed` array wrap.
+
+## [2.1.0] - 2026-05-09
+
+### Added
+
+- Opt-in LLM ad reviewer (issue #197). New third LLM stage that runs after detection and validation but before audio cuts. Per detected ad it returns one of: `confirmed` (cut as-is), `adjust` (shift boundaries within a configurable cap, default 60 seconds), or `reject` (false positive). The reviewer also evaluates validator-rejected detections whose confidence sits within 20 percentage points of the user's `min_cut_confidence` slider and may resurrect them as real ads. Disabled by default. Lives behind a single toggle under a new "Experiments" section in Settings, with a dedicated Ad Reviewer subsection that exposes the toggle, model selector ("Same as pass model" by default), max boundary shift, and editable confirm/adjust/reject and resurrect/reject prompts with reset-to-default. New module `src/ad_reviewer.py`. New `ad_reviewer_log` audit table populated with one row per ad reviewed (verdict, original/adjusted boundaries, reasoning, confidence, model, latency, success). Per-ad reviewer fields persist inside `episodes.ad_markers_json` (`reviewer_verdict`, `reviewer_original_start`, `reviewer_original_end`, `reviewer_reasoning`, `reviewer_confidence`, `reviewer_model`, `source`). Failure handling is non-blocking: a per-ad LLM failure falls through with the ad unchanged, and a catastrophic stage failure returns the input ads unmodified.
+- New `GET /api/v1/stats/reviewer` endpoint with optional `podcast_slug` and `episode_id` query params. Returns total reviews, per-verdict counts, pass 1 / pass 2 adjustment counts, average boundary shift in seconds, resurrection count, and failure count. Surfaced in the Stats page as a new "Ad Reviewer Stats" card that hides when the reviewer has no logged data.
+- Episode detail page renders the original timestamps on top and a "Reviewer: MM:SS - MM:SS" line beneath when the reviewer adjusted boundaries. Reviewer-rejected ads in the rejected detections list show a "Source: Reviewer" tag.
+
+### Changed
+
+- Prompt placeholder substitution replaces unconditional appending of the dynamic sponsor block. `_inject_dynamic_sponsors` is gone; system, verification, review, and resurrect prompts now use explicit `{sponsor_database}` placeholders that the runtime substitutes via `_render_prompt`. The review prompt also accepts `{max_boundary_shift_seconds}`. Removing a placeholder from a customized prompt is now a supported way to opt out of that injection (legacy behavior always appended). Boundary-cap enforcement remains in code regardless of prompt content.
+- One-time migration on first start of this version backfills `{sponsor_database}` to user-customized `system_prompt` and `verification_prompt` rows so behavior matches what users had before. Idempotent via the `_review_prompt_migrated` settings flag. Default-flagged rows are untouched (the seed/refresh path manages those).
+- `get_static_system_prompt()` (used by the offline benchmark) now uses placeholder substitution against the seed sponsor list rather than appending. Output is identical to the previous concat for a non-empty list.
+- Extracted `_call_llm_for_window` from `src/ad_detector.py` to a free function `call_llm_for_window` in `src/utils/llm_call.py` with a parameterized `max_tokens` argument. The detector keeps the method as a thin wrapper. The reviewer reuses the same retry/backoff/auth-error semantics with a smaller token cap. Existing tests that patched the helper at `ad_detector.*` were updated to patch `utils.llm_call.*`.
+- Extracted `_find_json_array_candidates`, `extract_json_ads_array`, and the JSON parsing strategies from `src/ad_detector.py` to `src/utils/llm_response.py`. Added `extract_json_object` for the reviewer's single-object responses. Backward-compatible re-exports keep existing imports working.
+
+### Schema
+
+- New `ad_reviewer_log` table (created on fresh installs via SCHEMA_SQL and on existing installs via `_create_new_tables_only`). Indexed on `episode_id` and `podcast_id`.
+- Five new settings keys: `enable_ad_review` (bool, default false), `review_model` (string, default `same_as_pass`), `review_max_boundary_shift` (int seconds, default 60), `review_prompt`, `resurrect_prompt`. Plus the `_review_prompt_migrated` flag.
+
+## [2.0.27] - 2026-05-08
+
+### Fixed
+
+- Settings page: editing one field and clicking Save no longer ships the entire form as a payload. The `updateMutation.mutationFn` in `frontend/src/pages/Settings.tsx` now compares each state variable to its loaded value (`settings.X?.value`) and includes the field in the request body only when it changed. A short-circuit guard throws if `settings` is undefined at Save time, closing a sub-frame hydration window where the Save button could briefly render before the loaded values were applied to local state. The backend `if 'fieldName' in data:` guards in `update_ad_detection_settings()` already left omitted fields untouched in the DB; this PR adds two regression tests (`test_single_field_save_leaves_others_untouched`, `test_revert_to_defaults_is_accepted`) that lock that behaviour in. (#201)
+- Slug length cap raised from 64 to 200 chars in `src/utils/validation.py`. The strict canonical `SLUG_RE` was rejecting auto-generated slugs from long podcast titles -- representative example: an "Artificial Intelligence (AI) News, ChatGPT, OpenAI..." podcast generates a 78-char slug. Such podcasts created successfully (read-side validators are permissive) but every WRITE endpoint that re-validates the slug -- including `POST /api/v1/feeds/{slug}/episodes/{episode_id}/corrections` -- silently returned 400 with no obvious user-facing signal. Path-traversal characters and the must-start-with-alphanumeric rule are unchanged. (#202)
+
 ## [2.0.26] - 2026-05-06
 
 ### Added

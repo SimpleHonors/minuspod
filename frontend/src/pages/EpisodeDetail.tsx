@@ -4,12 +4,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getEpisode, getOriginalTranscript, reprocessEpisode, regenerateChapters } from '../api/feeds';
 import { submitCorrection } from '../api/patterns';
 import LoadingSpinner from '../components/LoadingSpinner';
+import Artwork from '../components/Artwork';
 import { EPISODE_STATUS_COLORS } from '../utils/episodeStatus';
+import { DETECTION_STAGE_META } from '../utils/detectionStage';
 import { stripHtml } from '../utils/stripHtml';
 import { formatConfidence } from '../utils/confidence';
 import AdEditor, { AdCorrection } from '../components/AdEditor';
 import PatternLink from '../components/PatternLink';
 import CollapsibleSection from '../components/CollapsibleSection';
+import { useLocalStorageState } from '../hooks/useLocalStorageState';
 import { formatStorage } from './settings/settingsUtils';
 
 function TranscriptBlock({ text }: { text: string }) {
@@ -28,16 +31,19 @@ type SaveStatus = 'idle' | 'saving' | 'success' | 'error';
 function EpisodeDetail() {
   const { slug, episodeId } = useParams<{ slug: string; episodeId: string }>();
   const [showEditor, setShowEditor] = useState(false);
+  const [createModeRequested, setCreateModeRequested] = useState(false);
   const [jumpToTime, setJumpToTime] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [showReprocessMenu, setShowReprocessMenu] = useState(false);
   const [editorSelectedAdIndex, setEditorSelectedAdIndex] = useState(0);
   const [savedScrollY, setSavedScrollY] = useState<number | null>(null);
-  const [reviewMode, setReviewMode] = useState<'processed' | 'original'>(
-    () => (localStorage.getItem('ad-editor-review-mode') === 'original' ? 'original' : 'processed')
+  const [reviewMode, setReviewMode] = useLocalStorageState<'processed' | 'original'>(
+    'ad-editor-review-mode',
+    'processed',
   );
-  const [originalTranscriptRequested, setOriginalTranscriptRequested] = useState(
-    () => localStorage.getItem('episode-original-transcript') === 'true'
+  const [originalTranscriptRequested, setOriginalTranscriptRequested] = useLocalStorageState<boolean>(
+    'episode-original-transcript',
+    false,
   );
   const editorRef = useRef<HTMLDivElement>(null);
 
@@ -72,20 +78,34 @@ function EpisodeDetail() {
 
   // Mutation for submitting ad corrections
   const correctionMutation = useMutation({
-    mutationFn: (correction: AdCorrection) =>
-      submitCorrection(slug!, episodeId!, {
+    mutationFn: (correction: AdCorrection) => {
+      if (correction.type === 'create') {
+        return submitCorrection(slug!, episodeId!, {
+          type: 'create',
+          start: correction.start,
+          end: correction.end,
+          sponsor: correction.sponsor,
+          text_template: correction.text_template,
+          scope: correction.scope,
+          reason: correction.reason,
+        });
+      }
+      const oa = correction.originalAd!;
+      return submitCorrection(slug!, episodeId!, {
         type: correction.type,
         original_ad: {
-          start: correction.originalAd.start,
-          end: correction.originalAd.end,
-          pattern_id: correction.originalAd.pattern_id,
-          confidence: correction.originalAd.confidence,
-          reason: correction.originalAd.reason,
-          sponsor: correction.originalAd.sponsor,
+          start: oa.start,
+          end: oa.end,
+          pattern_id: oa.pattern_id,
+          confidence: oa.confidence,
+          reason: oa.reason,
+          sponsor: oa.sponsor,
         },
         adjusted_start: correction.adjustedStart,
         adjusted_end: correction.adjustedEnd,
-      }),
+        sponsor: correction.sponsor,
+      });
+    },
     onMutate: () => {
       setSaveStatus('saving');
     },
@@ -106,13 +126,16 @@ function EpisodeDetail() {
     correctionMutation.mutate(correction);
   };
 
-  // Jump to a specific ad in the editor
-  const handleJumpToAd = (startTime: number) => {
+  // Jump to a specific ad in the editor. Sets BOTH selected index (so the
+  // modal renders the right ad) and seek time (so audio playback lands at
+  // the ad's start). Without the index, the modal stays on whichever ad
+  // was last selected (defaulting to 0 on first open).
+  const handleJumpToAd = (adIndex: number, startTime: number) => {
+    setEditorSelectedAdIndex(adIndex);
     setJumpToTime(startTime);
     if (!showEditor) {
       setShowEditor(true);
     }
-    // Scroll to editor
     setTimeout(() => {
       editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
@@ -161,10 +184,15 @@ function EpisodeDetail() {
     return formatStorage(mb);
   };
 
-  // Helper to find correction for an ad marker
+  // Helper to find correction for an ad marker. 'create' corrections
+  // have original_bounds=null (there is no original -- it's a net-new
+  // marker); guard the dereference so iterating the corrections list
+  // doesn't crash after a create save.
   const getAdCorrection = (start: number, end: number) => {
     return episode?.corrections?.find(c =>
-      c.original_bounds.start === start && c.original_bounds.end === end
+      c.original_bounds &&
+      c.original_bounds.start === start &&
+      c.original_bounds.end === end
     );
   };
 
@@ -192,13 +220,10 @@ function EpisodeDetail() {
       <div className="bg-card rounded-lg border border-border p-4 sm:p-6 mb-6">
         <div className="flex gap-4">
           <div className="w-16 h-16 sm:w-24 sm:h-24 shrink-0">
-            <img
+            <Artwork
               src={`/api/v1/feeds/${slug}/artwork`}
               alt="Podcast artwork"
               className="w-full h-full object-cover rounded-lg"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%239ca3af"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-              }}
             />
           </div>
           <div className="flex flex-col gap-2 min-w-0">
@@ -326,6 +351,45 @@ function EpisodeDetail() {
         )}
       </div>
 
+      {/* "Add new ad" entry when the LLM found nothing (or before edit). */}
+      {episode.status === 'completed' && episode.transcript &&
+       (!episode.adMarkers || episode.adMarkers.length === 0) && (
+        <div className="bg-card rounded-lg border border-border p-6 mb-6">
+          {showEditor && createModeRequested ? (
+            <AdEditor
+              detectedAds={[]}
+              audioDuration={episode.originalDuration ?? 0}
+              onCorrection={handleCorrection}
+              onClose={() => {
+                setShowEditor(false);
+                setCreateModeRequested(false);
+              }}
+              saveStatus={saveStatus}
+              createMode={true}
+            />
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">No ads detected</h2>
+                <p className="text-sm text-muted-foreground">
+                  Spotted an ad the detector missed? Mark it manually so the pattern matcher learns it.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setSavedScrollY(window.scrollY);
+                  setCreateModeRequested(true);
+                  setShowEditor(true);
+                }}
+                className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+              >
+                + Add new ad
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {episode.adMarkers && episode.adMarkers.length > 0 && (
         <div className="bg-card rounded-lg border border-border p-6 mb-6">
           <div className="mb-4">
@@ -335,21 +399,41 @@ function EpisodeDetail() {
                 Detected Ads ({episode.adMarkers.length})
               </h2>
               {episode.status === 'completed' && episode.transcript && (
-                <button
-                  onClick={() => {
-                    if (!showEditor) {
-                      setSavedScrollY(window.scrollY);
-                    }
-                    setShowEditor(!showEditor);
-                  }}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                  {showEditor ? 'Hide Editor' : 'Edit Ads'}
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => {
+                      if (!showEditor) {
+                        setSavedScrollY(window.scrollY);
+                      }
+                      setCreateModeRequested(false);
+                      setShowEditor(!showEditor);
+                    }}
+                    aria-label={showEditor ? 'Hide editor' : 'Edit ads'}
+                    title={showEditor ? 'Hide editor' : 'Edit ads'}
+                    className="inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs sm:text-sm bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors whitespace-nowrap"
+                  >
+                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    <span className="hidden sm:inline">{showEditor ? 'Hide Editor' : 'Edit Ads'}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!showEditor) setSavedScrollY(window.scrollY);
+                      setCreateModeRequested(true);
+                      setShowEditor(true);
+                    }}
+                    aria-label="Add new ad"
+                    title="Add new ad"
+                    className="inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs sm:text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors whitespace-nowrap"
+                  >
+                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span className="hidden sm:inline">Add new ad</span>
+                  </button>
+                </div>
               )}
             </div>
             {/* Row 2: Detection stage info + time saved */}
@@ -367,59 +451,23 @@ function EpisodeDetail() {
             )}
           </div>
 
-          {/* AdEditor for reviewing/editing ad detections */}
+          {/* AdEditor for reviewing/editing ad detections. The
+              Processed/Original toggle and the "+ Add new ad" button
+              now live INSIDE the modal header, so they remain reachable
+              once the editor is open. */}
           {showEditor && episode.status === 'completed' && (
             <div className="mb-4" ref={editorRef}>
-              <div className="mb-3 flex items-center gap-3 text-sm">
-                <span className="text-muted-foreground">Review mode:</span>
-                <div className="inline-flex rounded-md border border-input overflow-hidden" role="group">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReviewMode('processed');
-                      localStorage.setItem('ad-editor-review-mode', 'processed');
-                    }}
-                    className={`px-3 py-1 transition-colors ${
-                      reviewMode === 'processed'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background text-muted-foreground hover:bg-secondary'
-                    }`}
-                  >
-                    Processed
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!episode.hasOriginalAudio}
-                    onClick={() => {
-                      setReviewMode('original');
-                      localStorage.setItem('ad-editor-review-mode', 'original');
-                    }}
-                    title={
-                      episode.hasOriginalAudio
-                        ? 'Play the pre-cut audio to hear exactly what was removed'
-                        : 'Retain original audio is off in settings, or this episode was processed before the feature existed. Reprocess the episode to capture the original.'
-                    }
-                    className={`px-3 py-1 border-l border-input transition-colors ${
-                      reviewMode === 'original' && episode.hasOriginalAudio
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background text-muted-foreground hover:bg-secondary'
-                    } disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-background`}
-                  >
-                    Original
-                  </button>
-                </div>
-              </div>
               <AdEditor
                 detectedAds={detectedAds}
                 audioDuration={episode.originalDuration ?? 0}
-                audioUrl={
-                  reviewMode === 'original' && episode.hasOriginalAudio && episode.originalAudioUrl
-                    ? episode.originalAudioUrl
-                    : `/episodes/${slug}/${episode.id}.mp3`
-                }
+                audioUrl={`/episodes/${slug}/${episode.id}.mp3`}
+                audioMode={reviewMode}
+                hasOriginal={!!episode.hasOriginalAudio}
+                onAudioModeChange={setReviewMode}
                 onCorrection={handleCorrection}
                 onClose={() => {
                   setShowEditor(false);
+                  setCreateModeRequested(false);
                   if (savedScrollY !== null) {
                     setTimeout(() => window.scrollTo(0, savedScrollY), 0);
                     setSavedScrollY(null);
@@ -429,6 +477,7 @@ function EpisodeDetail() {
                 saveStatus={saveStatus}
                 selectedAdIndex={editorSelectedAdIndex}
                 onSelectedAdIndexChange={setEditorSelectedAdIndex}
+                createMode={createModeRequested}
               />
             </div>
           )}
@@ -442,20 +491,46 @@ function EpisodeDetail() {
                 {/* Row 1: Time, badges, jump button, confidence */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm">
-                    {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
+                    {segment.reviewer_verdict === 'adjust' && segment.reviewer_original_start !== undefined && segment.reviewer_original_end !== undefined
+                      ? `${formatTimestamp(segment.reviewer_original_start)} - ${formatTimestamp(segment.reviewer_original_end)}`
+                      : `${formatTimestamp(segment.start)} - ${formatTimestamp(segment.end)}`}
                   </span>
-                  {segment.detection_stage && (
-                    <span className={`px-1.5 py-0.5 text-xs rounded font-medium ${
-                      segment.detection_stage === 'verification'
-                        ? 'bg-purple-500/20 text-purple-600 dark:text-purple-400'
-                        : 'bg-blue-500/20 text-blue-600 dark:text-blue-400'
-                    }`}>
-                      {segment.detection_stage === 'verification' ? 'Pass 2' : 'Pass 1'}
+                  {segment.detection_stage && DETECTION_STAGE_META[segment.detection_stage] && (
+                    <span className={`px-1.5 py-0.5 text-xs rounded font-medium ${DETECTION_STAGE_META[segment.detection_stage].className}`}>
+                      {DETECTION_STAGE_META[segment.detection_stage].label}
+                    </span>
+                  )}
+                  {segment.sponsor && (
+                    <span
+                      className="px-1.5 py-0.5 text-xs rounded font-medium bg-muted text-muted-foreground"
+                      title="Sponsor"
+                    >
+                      {segment.sponsor}
+                    </span>
+                  )}
+                  {segment.reviewer_verdict === 'confirmed' && (
+                    <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-green-500/20 text-green-600 dark:text-green-400" title={segment.reviewer_reasoning || 'Confirmed by reviewer'}>
+                      Reviewer: confirmed
+                    </span>
+                  )}
+                  {segment.reviewer_verdict === 'adjust' && (
+                    <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-cyan-500/20 text-cyan-600 dark:text-cyan-400" title={segment.reviewer_reasoning || 'Boundaries adjusted by reviewer'}>
+                      Reviewer: adjusted
+                    </span>
+                  )}
+                  {segment.reviewer_verdict === 'resurrect' && (
+                    <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-amber-500/20 text-amber-600 dark:text-amber-400" title={segment.reviewer_reasoning || 'Resurrected by reviewer'}>
+                      Reviewer: resurrected
+                    </span>
+                  )}
+                  {segment.reviewer_verdict === 'failure' && (
+                    <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-muted text-muted-foreground" title="Reviewer LLM call failed; original detection kept">
+                      Reviewer: skipped
                     </span>
                   )}
                   {episode.transcript && (
                     <button
-                      onClick={() => handleJumpToAd(segment.start)}
+                      onClick={() => handleJumpToAd(index, segment.start)}
                       className="px-3 py-1.5 sm:px-2 sm:py-0.5 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20 active:bg-primary/30 transition-colors touch-manipulation min-h-[36px] sm:min-h-0"
                       title="Jump to this ad in editor"
                     >
@@ -485,10 +560,25 @@ function EpisodeDetail() {
                     {formatConfidence(segment)}
                   </span>
                 </div>
-                {/* Row 2: Description - full width below badges for better mobile display */}
+                {/* Row 2: Detector's own note about the match. Framed as
+                    a "Match:" label so it doesn't read as a contradicting
+                    sponsor when the field carries reviewer-overwritten
+                    free text (e.g., boundary extension that swept up an
+                    adjacent ad's content). */}
                 {segment.reason && (
                   <p className="text-sm text-muted-foreground mt-2 wrap-break-word">
+                    <span className="font-medium">Match:</span>{' '}
                     <PatternLink reason={segment.reason} />
+                  </p>
+                )}
+                {segment.reviewer_verdict === 'adjust' && (
+                  <p className="text-sm text-cyan-600 dark:text-cyan-400 mt-1 font-mono">
+                    Reviewer: {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
+                  </p>
+                )}
+                {segment.reviewer_verdict && segment.reviewer_reasoning && (
+                  <p className="text-xs text-muted-foreground mt-1 italic">
+                    Reviewer: {segment.reviewer_reasoning}
                   </p>
                 )}
               </div>
@@ -526,6 +616,16 @@ function EpisodeDetail() {
                           <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-red-500/20 text-red-600 dark:text-red-400">
                             Rejected
                           </span>
+                          {segment.reviewer_verdict === 'reject' && (
+                            <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-red-500/20 text-red-700 dark:text-red-300" title={segment.reviewer_reasoning || 'Rejected by reviewer'}>
+                              Reviewer: rejected
+                            </span>
+                          )}
+                          {segment.reviewer_verdict === 'failure' && segment.source === 'reviewer' && (
+                            <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-muted text-muted-foreground" title="Reviewer LLM call failed; validator decision kept">
+                              Reviewer: skipped
+                            </span>
+                          )}
                           {correction && (
                             <span className={`px-1.5 py-0.5 text-xs rounded font-medium ${
                               correction.correction_type === 'confirm'

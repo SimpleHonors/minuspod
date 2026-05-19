@@ -9,8 +9,13 @@ from flask import request, send_file, abort
 
 from api import (
     api, limiter, log_request, json_response, error_response,
-    get_database, get_storage,
+    get_database, get_storage, extract_transcript_segment, get_status_service,
 )
+from audio_peaks import compute_peaks, PeaksError
+from chapters_generator import ChaptersGenerator
+from llm_client import start_episode_token_tracking, get_episode_token_totals
+from processing_queue import ProcessingQueue
+from utils.constants import EpisodeStatus
 from utils.episode_paths import episode_public_url
 from utils.text import parse_transcript_segments
 from utils.time import parse_timestamp, utc_now_iso
@@ -67,8 +72,8 @@ def list_episodes(slug):
         # Map status for frontend compatibility
         # 'processed' -> 'completed'; discovered/permanently_failed pass through
         status = ep['status']
-        if status == 'processed':
-            status = 'completed'
+        if status == EpisodeStatus.PROCESSED:
+            status = EpisodeStatus.COMPLETED.value
 
         episode_list.append({
             # Frontend expected fields
@@ -136,14 +141,14 @@ def get_episode(slug, episode_id):
 
     # Map status for frontend compatibility
     status = episode['status']
-    if status == 'processed':
-        status = 'completed'
+    if status == EpisodeStatus.PROCESSED:
+        status = EpisodeStatus.COMPLETED.value
 
     # Get file size and Podcasting 2.0 asset availability if processed
     file_size = None
     storage = get_storage()
 
-    if status == 'completed':
+    if status == EpisodeStatus.COMPLETED:
         file_path = storage.get_episode_path(slug, episode_id)
         if file_path.exists():
             file_size = file_path.stat().st_size
@@ -284,8 +289,8 @@ def serve_original_audio(slug, episode_id):
     if not path.exists():
         return error_response('Original audio file missing', 404)
     response = send_file(path, mimetype='audio/mpeg', conditional=True)
-    # Advertise byte-range support so browsers will issue Range requests
-    # to seek anywhere in the file. Without this header some clients
+    # Advertise byte-range support so the wavesurfer-based AdEditor can seek
+    # without re-downloading the file. Without this header some clients
     # download serially and refuse to seek past the buffered tail.
     response.headers['Accept-Ranges'] = 'bytes'
     return response
@@ -297,12 +302,12 @@ def get_episode_peaks(slug, episode_id):
     """Return waveform peaks for the requested window of an episode.
 
     Query params:
-        start    (float, default 0)         — window start in seconds
-        end      (float, default duration)  — window end in seconds
-        resolution_ms (int, default 50)     — peak bucket width
+        start    (float, default 0)         - window start in seconds
+        end      (float, default duration)  - window end in seconds
+        resolution_ms (int, default 50)     - peak bucket width
 
-    Used by the Ad Inbox review modal to render a wavesurfer waveform
-    scoped to the current ad ± a user-selectable context window.
+    Used by the AdEditor's wavesurfer view to render a waveform scoped to
+    the current ad selection plus a user-selectable context window.
     """
     if not is_valid_episode_id(episode_id):
         abort(400)
@@ -337,7 +342,6 @@ def get_episode_peaks(slug, episode_id):
     end_seconds = _f('end')
     resolution_ms = _i('resolution_ms', 50)
 
-    from audio_peaks import compute_peaks, PeaksError
     try:
         peaks, effective_resolution_ms = compute_peaks(
             path,
@@ -360,6 +364,55 @@ def get_episode_peaks(slug, episode_id):
     })
 
 
+@api.route('/feeds/<slug>/episodes/<episode_id>/transcript-span', methods=['GET'])
+@log_request
+def get_episode_transcript_span(slug, episode_id):
+    """Return the transcript text spanning a [start, end] window.
+
+    Used by the AdEditor create mode to auto-populate the text_template
+    field from the currently selected window of the episode's VTT.
+    """
+    if not is_valid_episode_id(episode_id):
+        abort(400)
+    db = get_database()
+    episode = db.get_episode(slug, episode_id)
+    if not episode:
+        return error_response('Episode not found', 404)
+
+    def _f(name, default=None):
+        raw = request.args.get(name)
+        if raw is None or raw == '':
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            abort(400, description=f"{name} must be a number")
+
+    start_seconds = _f('start', 0.0) or 0.0
+    end_seconds = _f('end')
+    if end_seconds is None:
+        return error_response('end is required', 400)
+    if start_seconds < 0 or end_seconds <= start_seconds:
+        return error_response('require 0 <= start < end', 400)
+    duration = episode.get('original_duration') or 0
+    if duration and end_seconds > duration + 1:
+        return error_response(
+            f'end ({end_seconds}) exceeds episode duration ({duration})', 400
+        )
+
+    transcript = db.get_transcript_for_timestamps(slug, episode_id)
+    if not transcript:
+        return error_response('Transcript not available for this episode', 404)
+
+    text = extract_transcript_segment(transcript, start_seconds, end_seconds)
+    return json_response({
+        'episodeId': episode_id,
+        'start': start_seconds,
+        'end': end_seconds,
+        'text': text or '',
+    })
+
+
 @api.route('/feeds/<slug>/episodes/<episode_id>/reprocess', methods=['POST'])
 @limiter.limit("5 per minute")
 @log_request
@@ -376,7 +429,7 @@ def reprocess_episode(slug, episode_id):
     if not episode:
         return error_response('Episode not found', 404)
 
-    if episode['status'] == 'processing':
+    if episode['status'] == EpisodeStatus.PROCESSING:
         return error_response('Episode is currently processing', 409)
 
     podcast = db.get_podcast_by_slug(slug)
@@ -384,23 +437,25 @@ def reprocess_episode(slug, episode_id):
         return error_response('Podcast not found', 404)
 
     try:
-        # 1. Delete processed audio file
         storage.delete_processed_file(slug, episode_id)
-
-        # 2. Clear episode details from database (transcript, ads, etc.)
         db.clear_episode_details(slug, episode_id)
 
-        # 3. Reset episode status to pending
-        db.reset_episode_status(slug, episode_id)
+        # Mark as user-initiated so the background drainer honors it
+        # even on auto-process-disabled feeds.
+        db.upsert_episode(
+            slug, episode_id,
+            status=EpisodeStatus.PENDING.value,
+            reprocess_requested_at=utc_now_iso(),
+            retry_count=0,
+            error_message=None,
+        )
 
-        # 4. Get episode metadata for processing
         episode_url = episode.get('original_url')
         episode_title = episode.get('title', 'Unknown')
         podcast_name = podcast.get('title', slug)
         episode_description = episode.get('description')
         episode_published_at = episode.get('published_at')
 
-        # 5. Start background processing (non-blocking, uses ProcessingQueue lock)
         from main_app.processing import start_background_processing
         logger.info(f"[{slug}:{episode_id}] Starting reprocess (async)")
 
@@ -414,13 +469,13 @@ def reprocess_episode(slug, episode_id):
                 'message': 'Episode reprocess started',
                 'episodeId': episode_id,
                 'status': 'processing'
-            }, 202)  # 202 Accepted - processing started asynchronously
+            }, 202)
         else:
-            # Queue is busy - add to processing queue so background processor picks it up
-            db.queue_episode_for_processing(
+            db.upsert_episode_for_processing(
                 slug, episode_id, episode_url, episode_title,
                 episode_published_at, episode_description
             )
+            get_status_service().queue_episode(slug, episode_id, episode_title, podcast_name)
             logger.info(f"[{slug}:{episode_id}] Queue busy ({reason}), added to processing queue")
             return json_response({
                 'message': 'Episode queued for reprocess',
@@ -467,9 +522,6 @@ def regenerate_chapters(slug, episode_id):
     episode_title = episode.get('title', 'Unknown')
 
     try:
-        from chapters_generator import ChaptersGenerator
-        from llm_client import start_episode_token_tracking, get_episode_token_totals
-
         start_episode_token_tracking()
         chapters_gen = ChaptersGenerator()
 
@@ -481,6 +533,7 @@ def regenerate_chapters(slug, episode_id):
                 episode_description=episode_description,
                 podcast_name=podcast_name,
                 episode_title=episode_title,
+                episode_id=episode_id,
             )
         finally:
             token_totals = get_episode_token_totals()
@@ -566,7 +619,7 @@ def reprocess_all_episodes(slug):
         return error_response('Feed not found', 404)
 
     # Get all episodes that have been processed
-    episodes, _ = db.get_episodes(slug, status='processed')
+    episodes, _ = db.get_episodes(slug, status=EpisodeStatus.PROCESSED.value)
 
     if not episodes:
         return json_response({
@@ -583,7 +636,7 @@ def reprocess_all_episodes(slug):
         episode_id = episode['episode_id']
 
         # Skip if already processing
-        if episode.get('status') == 'processing':
+        if episode.get('status') == EpisodeStatus.PROCESSING:
             skipped.append({'episodeId': episode_id, 'reason': 'Already processing'})
             continue
 
@@ -597,7 +650,7 @@ def reprocess_all_episodes(slug):
             # Reset status to pending with reprocess mode for priority queue
             db.upsert_episode(
                 slug, episode_id,
-                status='pending',
+                status=EpisodeStatus.PENDING.value,
                 reprocess_mode=mode,
                 reprocess_requested_at=utc_now_iso(),
                 retry_count=0,
@@ -671,7 +724,10 @@ def bulk_episode_action(slug):
                 continue
             eligible_ids.append(episode_id)
         if eligible_ids:
-            queued = db.batch_set_episodes_pending(slug, eligible_ids)
+            # reprocess_requested_at marks the row as user-initiated so the
+            # background drainer's auto-process-disabled gate bypasses it.
+            queued = db.batch_set_episodes_pending(slug, eligible_ids,
+                                                    reprocess_requested_at=utc_now_iso())
             skipped += len(eligible_ids) - queued
 
     elif action in ('reprocess', 'reprocess_full'):
@@ -761,8 +817,6 @@ def retry_ad_detection(slug, episode_id):
         return error_response('No transcript available - full reprocess required', 400)
 
     try:
-        from llm_client import start_episode_token_tracking, get_episode_token_totals
-
         # Parse transcript back into segments
         segments = parse_transcript_segments(transcript)
 
@@ -779,9 +833,17 @@ def retry_ad_detection(slug, episode_id):
         from ad_detector import AdDetector
         ad_detector = AdDetector()
         try:
+            # Load podcast tags for community-pattern eligibility.
+            try:
+                _pod_row = db.get_podcast_by_slug(slug)
+                _tags_json = _pod_row.get('tags') if _pod_row else None
+                podcast_tags = set(json.loads(_tags_json)) if _tags_json else None
+            except Exception:
+                podcast_tags = None
             ad_result = ad_detector.process_transcript(
                 segments, podcast_name, episode.get('title', 'Unknown'), slug, episode_id,
-                podcast_id=slug  # Pass slug as podcast_id for pattern matching
+                podcast_id=slug,  # Pass slug as podcast_id for pattern matching
+                podcast_tags=podcast_tags,
             )
         finally:
             token_totals = get_episode_token_totals()
@@ -827,7 +889,7 @@ def retry_ad_detection(slug, episode_id):
 @api.route('/episodes/processing', methods=['GET'])
 @log_request
 def get_processing_episodes():
-    """Get all episodes currently in processing status."""
+    """Episodes processing now (DB + StatusService current_job). Issue #236."""
     db = get_database()
     conn = db.get_connection()
 
@@ -838,15 +900,54 @@ def get_processing_episodes():
         WHERE e.status = 'processing'
         ORDER BY e.updated_at DESC
     """)
-    episodes = cursor.fetchall()
-
-    return json_response([{
+    episodes = [{
         'episodeId': ep['episode_id'],
         'slug': ep['slug'],
         'title': ep['title'] or 'Unknown',
         'podcast': ep['podcast'] or ep['slug'],
-        'startedAt': None  # Could add timestamp tracking later
-    } for ep in episodes])
+        'startedAt': None,
+        'stage': None,
+    } for ep in cursor.fetchall()]
+
+    status = get_status_service().get_status()
+    current = status.current_job
+    if current:
+        match = next((e for e in episodes
+                      if e['slug'] == current.slug and e['episodeId'] == current.episode_id), None)
+        if match:
+            match['title'] = current.title or match['title']
+            match['podcast'] = current.podcast_name or match['podcast']
+            match['startedAt'] = current.started_at
+            match['stage'] = current.stage
+        else:
+            episodes.append({
+                'episodeId': current.episode_id,
+                'slug': current.slug,
+                'title': current.title or 'Unknown',
+                'podcast': current.podcast_name or current.slug,
+                'startedAt': current.started_at,
+                'stage': current.stage,
+            })
+
+    # Append queued episodes (waiting on the lock) so the panel and banner
+    # surface "what's next" alongside the active job.
+    seen = {(e['slug'], e['episodeId']) for e in episodes}
+    for q in status.queued_episodes:
+        key = (q['slug'], q['episode_id'])
+        if key in seen:
+            continue
+        seen.add(key)
+        episodes.append({
+            'episodeId': q['episode_id'],
+            'slug': q['slug'],
+            'title': q.get('title') or 'Unknown',
+            'podcast': q.get('podcast_name') or q['slug'],
+            'startedAt': None,
+            'queuedAt': q.get('queued_at'),
+            'stage': 'queued',
+        })
+
+    return json_response(episodes)
 
 
 @api.route('/feeds/<slug>/episodes/<episode_id>/cancel', methods=['POST'])
@@ -861,7 +962,7 @@ def cancel_episode_processing(slug, episode_id):
     if not episode:
         return error_response('Episode not found', 404)
 
-    if episode['status'] != 'processing':
+    if episode['status'] != EpisodeStatus.PROCESSING:
         return error_response(
             f"Episode is not processing (status: {episode['status']})",
             400
@@ -882,7 +983,6 @@ def cancel_episode_processing(slug, episode_id):
         conn.commit()
 
         try:
-            from processing_queue import ProcessingQueue
             queue = ProcessingQueue()
             if queue.is_processing(slug, episode_id):
                 queue.release()
@@ -922,7 +1022,7 @@ def reprocess_episode_with_mode(slug, episode_id):
     if not episode:
         return error_response('Episode not found', 404)
 
-    if episode['status'] == 'processing':
+    if episode['status'] == EpisodeStatus.PROCESSING:
         return error_response('Episode is currently processing', 409)
 
     podcast = db.get_podcast_by_slug(slug)
@@ -933,7 +1033,7 @@ def reprocess_episode_with_mode(slug, episode_id):
         # 1. Set reprocess_mode FIRST so process_episode can read it
         db.upsert_episode(
             slug, episode_id,
-            status='pending',
+            status=EpisodeStatus.PENDING.value,
             reprocess_mode=mode,
             reprocess_requested_at=utc_now_iso(),
             retry_count=0,
@@ -967,11 +1067,11 @@ def reprocess_episode_with_mode(slug, episode_id):
                 'status': 'processing'
             }, 202)  # 202 Accepted
         else:
-            # Queue is busy - add to processing queue so background processor picks it up
-            db.queue_episode_for_processing(
+            db.upsert_episode_for_processing(
                 slug, episode_id, episode_url, episode_title,
                 episode_published_at, episode_description
             )
+            get_status_service().queue_episode(slug, episode_id, episode_title, podcast_name)
             logger.info(f"[{slug}:{episode_id}] Queue busy ({reason}), added to processing queue")
             return json_response({
                 'message': f'Episode queued for {mode} reprocess',

@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import json
 
+try:
+    import acoustid
+except ImportError:
+    acoustid = None
+
 from utils.audio import get_audio_duration
 from utils.subprocess_registry import tracked_run
 from config import (
@@ -40,6 +45,13 @@ FINGERPRINT_CHUNK_SIZE = 10.0
 
 # Step size for sliding window (seconds)
 SLIDING_STEP_SIZE = 2.0
+
+# Cap for the per-window slow scan when the full-file fast path fails.
+# When fpcalc can't decode the audio end-to-end, the per-window scan uses
+# the same fpcalc binary on each window and almost always produces zero
+# new matches -- the only realistic save is a single bad frame midway. 90s
+# is enough to catch that case without burning the 10-minute upper bound.
+FALLBACK_SLOW_TIMEOUT = 90
 
 
 @dataclass
@@ -213,9 +225,10 @@ class AudioFingerprinter:
         Returns:
             Similarity score between 0 and 1
         """
+        if acoustid is None:
+            logger.warning("acoustid module not available for fingerprint comparison")
+            return 0.0
         try:
-            import acoustid
-
             # decode_fingerprint expects bytes, not str (ctypes c_char pointer)
             if isinstance(fp1, str):
                 fp1 = fp1.encode('utf-8')
@@ -235,9 +248,6 @@ class AudioFingerprinter:
             # Compare using bit error rate
             return self._calculate_similarity(fp1_array, fp2_array)
 
-        except ImportError:
-            logger.warning("acoustid module not available for fingerprint comparison")
-            return 0.0
         except (TypeError, ctypes.ArgumentError) as e:
             logger.error(f"Fingerprint comparison failed (bad data): {e}")
             return -1.0
@@ -332,9 +342,7 @@ class AudioFingerprinter:
         Returns:
             List of (pattern_id, raw_int_array, duration, sponsor)
         """
-        try:
-            import acoustid
-        except ImportError:
+        if acoustid is None:
             logger.warning("acoustid not available for fingerprint decoding")
             return []
 
@@ -503,7 +511,14 @@ class AudioFingerprinter:
         else:
             logger.warning("Full-file fingerprint failed, falling back to per-window scan")
 
-        # Slow fallback: per-window subprocess scanning
+        # Slow fallback: per-window subprocess scanning.
+        # Cap separately at FALLBACK_SLOW_TIMEOUT (much shorter than the
+        # full-file timeout). When the fast path fails because fpcalc can't
+        # decode the audio source, the per-window scan uses the same fpcalc
+        # and almost always produces zero new matches -- burning the full
+        # 10-minute budget is wasted work. 90s is enough to catch the rare
+        # case where the failure was a single bad frame.
+        slow_timeout = min(timeout, FALLBACK_SLOW_TIMEOUT)
         scan_start_time = time.time()
         last_log_time = scan_start_time
         position = 0.0
@@ -512,7 +527,7 @@ class AudioFingerprinter:
             elapsed = now - scan_start_time
 
             # Timeout check
-            if elapsed > timeout:
+            if elapsed > slow_timeout:
                 logger.warning(
                     f"Fingerprint scan timed out after {elapsed:.0f}s "
                     f"at {position:.1f}s/{total_duration:.1f}s with {len(matches)} matches"

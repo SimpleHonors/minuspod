@@ -10,6 +10,13 @@ from utils.time import utc_now_iso
 from slugify import slugify
 
 from main_app.cache import TTLCache
+# Singletons are created in main_app/__init__.py before the explicit
+# `from main_app.feeds import ...` near the bottom of that module, so
+# importing them here at module level is safe despite the surface-level
+# circular shape. The previous _get_components() helper returned a
+# positional 5-tuple; replacing it with direct imports removes the
+# tuple-reorder footgun the audit flagged.
+from main_app import db, rss_parser, storage, status_service, pattern_service
 
 refresh_logger = logging.getLogger('podcast.refresh')
 feed_logger = logging.getLogger('podcast.feed')
@@ -28,19 +35,12 @@ _parsed_feeds_cache = TTLCache(ttl_seconds=60)
 _refresh_coalesce = TTLCache(ttl_seconds=30)
 
 
-def _get_components():
-    """Late import to avoid circular imports at module level."""
-    from main_app import db, rss_parser, storage, status_service, pattern_service
-    return db, rss_parser, storage, status_service, pattern_service
-
-
 def get_feed_map():
     """Get feed map from database, with TTL caching."""
     cached = _feed_cache.get('all_feeds')
     if cached is not None:
         return cached
 
-    db, _, _, _, _ = _get_components()
     feeds = db.get_feeds_config()
     result = {slugify(feed['out'].strip('/')): feed for feed in feeds}
     _feed_cache.set('all_feeds', result)
@@ -63,7 +63,6 @@ def get_parsed_feed(slug: str, source_url: str):
         refresh_logger.debug(f"[{slug}] Using cached parsed feed")
         return cached
 
-    _, rss_parser, _, _, _ = _get_components()
     feed_content = rss_parser.fetch_feed(source_url)
     if feed_content:
         parsed = rss_parser.parse_feed(feed_content)
@@ -87,7 +86,6 @@ def refresh_rss_feed(slug: str, feed_url: str, force: bool = False):
         return
     _refresh_coalesce.set(slug, True)
 
-    db, rss_parser, storage, status_service, pattern_service = _get_components()
     try:
         # Get podcast name and etag for conditional fetch
         podcast = db.get_podcast_by_slug(slug)
@@ -173,6 +171,20 @@ def refresh_rss_feed(slug: str, feed_url: str, force: bool = False):
                 update_kwargs['etag'] = new_etag
                 update_kwargs['last_modified_header'] = new_last_modified
             db.update_podcast(slug, **update_kwargs)
+
+            # Map iTunes categories to MinusPod vocabulary tags, then refresh the
+            # RSS layer of the podcast's tags. set_podcast_tags also folds in
+            # episode-level tags and the user_tags layer.
+            try:
+                from utils.community_tags import map_itunes_category
+                raw_cats = rss_parser.extract_podcast_categories(parsed_feed)
+                rss_tags = sorted({
+                    tag for cat in raw_cats
+                    if (tag := map_itunes_category(cat))
+                })
+                db.set_podcast_tags(slug, rss_tags=rss_tags)
+            except Exception as e:
+                refresh_logger.warning(f"[{slug}] iTunes category mapping failed: {e}")
 
             # Detect DAI platform and network from feed metadata
             feed_author = parsed_feed.feed.get('author', '')

@@ -3,11 +3,13 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getFeed, getEpisodes, refreshFeed, updateFeed, getNetworks, reprocessAllEpisodes, ReprocessAllResult, bulkEpisodeAction, BulkAction } from '../api/feeds';
 import type { BulkActionResult } from '../api/types';
+import Artwork from '../components/Artwork';
 import CopyButton from '../components/CopyButton';
 import DropdownMenu from '../components/DropdownMenu';
 import EpisodeList from '../components/EpisodeList';
 import LoadingSpinner from '../components/LoadingSpinner';
 import TriStateSelect from '../components/TriStateSelect';
+import { FeedTagsEditor } from '../components/FeedTagsEditor';
 import { formatStorage } from './settings/settingsUtils';
 
 function FeedDetail() {
@@ -166,12 +168,13 @@ function FeedDetail() {
     setSelectedIds(new Set());
   };
 
-  // Determine which bulk actions are valid for current selection
+  // Bulk-action eligibility: count per-action so a mixed selection still
+  // surfaces actionable buttons (backend skips ineligible rows).
   const selectedEpisodes = episodes.filter(ep => selectedIds.has(ep.id));
-  const allDiscovered = selectedEpisodes.length > 0 && selectedEpisodes.every(ep => ep.status === 'discovered');
-  const allProcessed = selectedEpisodes.length > 0 && selectedEpisodes.every(ep =>
+  const discoveredCount = selectedEpisodes.filter(ep => ep.status === 'discovered').length;
+  const processedCount = selectedEpisodes.filter(ep =>
     ['completed', 'failed', 'permanently_failed'].includes(ep.status)
-  );
+  ).length;
   const hasSelection = selectedIds.size > 0;
 
   if (feedLoading) {
@@ -198,13 +201,10 @@ function FeedDetail() {
       <div className="bg-card rounded-lg border border-border p-6 mb-6">
         <div className="flex flex-col sm:flex-row gap-6">
           <div className="w-32 h-32 shrink-0 mx-auto sm:mx-0">
-            <img
+            <Artwork
               src={`/api/v1/feeds/${slug}/artwork`}
               alt={feed.title}
               className="w-full h-full object-cover rounded-lg"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%239ca3af"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-              }}
             />
           </div>
           <div className="flex-1 min-w-0">
@@ -414,6 +414,8 @@ function FeedDetail() {
         </div>
       </div>
 
+      {slug && <FeedTagsEditor slug={slug} />}
+
       {/* Episodes header with status filter */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 className="text-xl font-semibold text-foreground">
@@ -456,43 +458,43 @@ function FeedDetail() {
       {hasSelection && (
         <div className="mb-4 p-3 bg-secondary/50 rounded-lg border border-border flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-foreground">{selectedIds.size} selected</span>
-          <div className="flex items-center gap-2 ml-auto">
-            {allDiscovered && (
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
+            {discoveredCount > 0 && (
               <button
                 onClick={() => bulkMutation.mutate({ action: 'process' })}
                 disabled={bulkMutation.isPending}
-                className="px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                className="px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 whitespace-nowrap min-w-[8rem] text-center"
               >
-                {bulkMutation.isPending ? 'Processing...' : 'Process'}
+                {bulkMutation.isPending ? 'Processing...' : `Process (${discoveredCount})`}
               </button>
             )}
-            {allProcessed && (
+            {processedCount > 0 && (
               <>
                 <button
                   onClick={() => bulkMutation.mutate({ action: 'reprocess' })}
                   disabled={bulkMutation.isPending}
-                  className="px-3 py-1.5 text-sm rounded bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm rounded bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50 whitespace-nowrap min-w-[8rem] text-center"
                 >
-                  Reprocess
+                  Reprocess ({processedCount})
                 </button>
                 <button
                   onClick={() => bulkMutation.mutate({ action: 'reprocess_full' })}
                   disabled={bulkMutation.isPending}
-                  className="px-3 py-1.5 text-sm rounded bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm rounded bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50 whitespace-nowrap min-w-[8rem] text-center"
                 >
-                  Full Reprocess
+                  Full Reprocess ({processedCount})
                 </button>
                 <button
                   onClick={() => setShowBulkDeleteConfirm(true)}
                   disabled={bulkMutation.isPending}
-                  className="px-3 py-1.5 text-sm rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 whitespace-nowrap min-w-[8rem] text-center"
                 >
-                  Delete
+                  Delete ({processedCount})
                 </button>
               </>
             )}
-            {!allDiscovered && !allProcessed && hasSelection && (
-              <span className="text-xs text-muted-foreground">Mixed statuses - select episodes with the same status for bulk actions</span>
+            {discoveredCount === 0 && processedCount === 0 && hasSelection && (
+              <span className="text-xs text-muted-foreground">No actionable items in selection (pending/processing rows skip)</span>
             )}
             <button
               onClick={() => setSelectedIds(new Set())}

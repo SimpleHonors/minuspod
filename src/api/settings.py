@@ -5,6 +5,8 @@ import os
 import re
 import threading
 import uuid
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping
 
 from flask import request
 
@@ -31,14 +33,59 @@ from webhook_service import render_template_preview, fire_test_event, load_webho
 logger = logging.getLogger('podcast.api')
 
 
+@dataclass(frozen=True)
+class SettingEntry:
+    """Typed view of one row from db.get_all_settings().
+
+    The producer (src/database/settings.py:get_all_settings) returns
+    ``{key: {'value': X, 'is_default': Y}}`` dicts to stay compatible with
+    consumers outside this module (secrets_crypto, main_app, tests). The
+    helpers below wrap that dict shape into ``SettingEntry`` so consumers
+    in this file get attribute access and a stable type.
+    """
+    value: Any
+    is_default: bool
+
+
+def _settings_view(raw: Mapping[str, Any]) -> Dict[str, SettingEntry]:
+    """Wrap the raw get_all_settings() dict into a SettingEntry mapping.
+
+    Skips entries that lack the expected shape so a malformed row can't
+    crash the GET /settings endpoint.
+    """
+    view: Dict[str, SettingEntry] = {}
+    for key, info in raw.items():
+        if not isinstance(info, Mapping):
+            continue
+        view[key] = SettingEntry(
+            value=info.get('value'),
+            is_default=bool(info.get('is_default', True)),
+        )
+    return view
+
+
 def _setting_value(settings, key, default=None):
-    """Extract value from the settings dict returned by get_all_settings()."""
-    return settings.get(key, {}).get('value', default)
+    """Extract value from the settings dict returned by get_all_settings().
+
+    Accepts both the raw dict shape and a ``SettingEntry`` mapping so
+    legacy callers keep working without a forced wrap.
+    """
+    entry = settings.get(key)
+    if entry is None:
+        return default
+    if isinstance(entry, SettingEntry):
+        return entry.value if entry.value is not None else default
+    return entry.get('value', default)
 
 
 def _setting_is_default(settings, key):
     """Check if a setting is still at its default value."""
-    return settings.get(key, {}).get('is_default', True)
+    entry = settings.get(key)
+    if entry is None:
+        return True
+    if isinstance(entry, SettingEntry):
+        return entry.is_default
+    return entry.get('is_default', True)
 
 
 # ========== Settings Endpoints ==========
@@ -48,11 +95,14 @@ def _setting_is_default(settings, key):
 def get_settings():
     """Get all settings."""
     db = get_database()
-    from database import DEFAULT_SYSTEM_PROMPT, DEFAULT_VERIFICATION_PROMPT
+    from database import (
+        DEFAULT_SYSTEM_PROMPT, DEFAULT_VERIFICATION_PROMPT,
+        DEFAULT_REVIEW_PROMPT, DEFAULT_RESURRECT_PROMPT,
+    )
     from ad_detector import AdDetector
     from config import DEFAULT_AD_DETECTION_MODEL as DEFAULT_MODEL
     from chapters_generator import CHAPTERS_MODEL
-    settings = db.get_all_settings()
+    settings = _settings_view(db.get_all_settings())
 
     # Shorthand for building {value, isDefault} response dicts
     def _sv(key, value=None):
@@ -160,9 +210,65 @@ def get_settings():
     audio_normalize_enabled = str(audio_normalize_enabled_raw).lower() in ('true', '1', 'yes')
     audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'aggressive')
 
+    # Per-stage LLM tunables: resolved value (env > DB > default) and env-override status.
+    from config import (
+        get_stage_tunable, stage_tunable_env_override,
+        STAGE_TUNABLE_DEFAULTS, STAGE_TUNABLE_PAYLOAD_KEYS,
+    )
+
+    def _tu(db_key):
+        # Reuse the already-loaded settings dict so we don't trigger 21 extra
+        # DB reads from get_stage_tunable's lazy import path.
+        return {
+            'value': get_stage_tunable(db_key, settings=settings),
+            'isDefault': _setting_is_default(settings, db_key),
+            'envOverride': stage_tunable_env_override(db_key),
+        }
+
+    tunables_payload = {
+        'detectionTemperature':        _tu('detection_temperature'),
+        'detectionMaxTokens':          _tu('detection_max_tokens'),
+        'detectionReasoningBudget':    _tu('detection_reasoning_budget'),
+        'detectionReasoningLevel':     _tu('detection_reasoning_level'),
+        'verificationTemperature':     _tu('verification_temperature'),
+        'verificationMaxTokens':       _tu('verification_max_tokens'),
+        'verificationReasoningBudget': _tu('verification_reasoning_budget'),
+        'verificationReasoningLevel':  _tu('verification_reasoning_level'),
+        'reviewerTemperature':         _tu('reviewer_temperature'),
+        'reviewerMaxTokens':           _tu('reviewer_max_tokens'),
+        'reviewerReasoningBudget':     _tu('reviewer_reasoning_budget'),
+        'reviewerReasoningLevel':      _tu('reviewer_reasoning_level'),
+        'chapterBoundaryTemperature':  _tu('chapter_boundary_temperature'),
+        'chapterBoundaryMaxTokens':    _tu('chapter_boundary_max_tokens'),
+        'chapterBoundaryReasoningBudget': _tu('chapter_boundary_reasoning_budget'),
+        'chapterBoundaryReasoningLevel':  _tu('chapter_boundary_reasoning_level'),
+        'chapterTitleTemperature':     _tu('chapter_title_temperature'),
+        'chapterTitleMaxTokens':       _tu('chapter_title_max_tokens'),
+        'chapterTitleReasoningBudget': _tu('chapter_title_reasoning_budget'),
+        'chapterTitleReasoningLevel':  _tu('chapter_title_reasoning_level'),
+        'ollamaNumCtx':                _tu('ollama_num_ctx'),
+        'windowSizeSeconds':           _tu('window_size_seconds'),
+        'windowOverlapSeconds':        _tu('window_overlap_seconds'),
+    }
+
+    enable_ad_review_raw = _setting_value(settings, 'enable_ad_review', 'false')
+    enable_ad_review = str(enable_ad_review_raw).strip().lower() == 'true'
+    review_model = _setting_value(settings, 'review_model', 'same_as_pass')
+    try:
+        review_max_boundary_shift = int(_setting_value(settings, 'review_max_boundary_shift', '60'))
+    except (ValueError, TypeError):
+        review_max_boundary_shift = 60
+    review_prompt = _setting_value(settings, 'review_prompt', DEFAULT_REVIEW_PROMPT)
+    resurrect_prompt = _setting_value(settings, 'resurrect_prompt', DEFAULT_RESURRECT_PROMPT)
+
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT)),
         'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT)),
+        'enableAdReview': _sv('enable_ad_review', enable_ad_review),
+        'reviewModel': _sv('review_model', review_model),
+        'reviewMaxBoundaryShift': _sv('review_max_boundary_shift', review_max_boundary_shift),
+        'reviewPrompt': _sv('review_prompt', review_prompt),
+        'resurrectPrompt': _sv('resurrect_prompt', resurrect_prompt),
         'claudeModel': _sv('claude_model', current_model),
         'verificationModel': _sv('verification_model', verification_model),
         'whisperModel': _sv('whisper_model', whisper_model),
@@ -197,9 +303,19 @@ def get_settings():
         'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
+        'stageTunables': tunables_payload,
+        'stageTunableDefaults': {
+            payload_key: STAGE_TUNABLE_DEFAULTS[db_key]
+            for payload_key, db_key, _ in STAGE_TUNABLE_PAYLOAD_KEYS
+        },
         'defaults': {
             'systemPrompt': DEFAULT_SYSTEM_PROMPT,
             'verificationPrompt': DEFAULT_VERIFICATION_PROMPT,
+            'reviewPrompt': DEFAULT_REVIEW_PROMPT,
+            'resurrectPrompt': DEFAULT_RESURRECT_PROMPT,
+            'enableAdReview': False,
+            'reviewModel': 'same_as_pass',
+            'reviewMaxBoundaryShift': 60,
             'claudeModel': DEFAULT_MODEL,
             'verificationModel': DEFAULT_MODEL,
             'whisperModel': default_whisper_model,
@@ -235,7 +351,13 @@ def get_settings():
 @api.route('/settings/ad-detection', methods=['PUT'])
 @log_request
 def update_ad_detection_settings():
-    """Update ad detection settings."""
+    """Update ad detection settings.
+
+    Dispatches the payload through a sequence of phase helpers; each helper
+    handles a related slice of fields (prompts, model selection, numeric
+    clamps, provider gating, whisper config, etc.). Helpers return None on
+    success or a Flask response tuple to short-circuit with a 400/409.
+    """
     data = request.get_json()
 
     if not data:
@@ -266,14 +388,65 @@ def update_ad_detection_settings():
 
     db = get_database()
 
-    if 'systemPrompt' in data:
-        db.set_setting('system_prompt', data['systemPrompt'], is_default=False)
-        logger.info("Updated system prompt")
+    phases = (
+        _apply_prompt_fields,
+        _apply_review_fields,
+        _apply_model_fields,
+        _apply_processing_flags,
+        _apply_min_cut_confidence,
+        _apply_audio_normalize_fields,
+        _apply_provider_fields,
+        _apply_whisper_fields,
+        _apply_vad_gap_fields,
+        _apply_transcribe_chunk_fields,
+        _apply_podcast_index_fields,
+        _apply_stage_tunables,
+    )
+    for phase in phases:
+        err = phase(db, data)
+        if err is not None:
+            return err
 
-    if 'verificationPrompt' in data:
-        db.set_setting('verification_prompt', data['verificationPrompt'], is_default=False)
-        logger.info("Updated verification prompt")
+    return json_response({'message': 'Settings updated'})
 
+
+def _apply_prompt_fields(db, data):
+    """Persist the four prompt strings (no coercion, no validation)."""
+    for payload_key, db_key, log_label in (
+        ('systemPrompt', 'system_prompt', 'system prompt'),
+        ('verificationPrompt', 'verification_prompt', 'verification prompt'),
+        ('reviewPrompt', 'review_prompt', 'review prompt'),
+        ('resurrectPrompt', 'resurrect_prompt', 'resurrect prompt'),
+    ):
+        if payload_key in data:
+            db.set_setting(db_key, data[payload_key], is_default=False)
+            logger.info(f"Updated {log_label}")
+    return None
+
+
+def _apply_review_fields(db, data):
+    """Persist the LLM-reviewer toggle, model, and boundary-shift clamp."""
+    if 'enableAdReview' in data:
+        value = 'true' if bool(data['enableAdReview']) else 'false'
+        db.set_setting('enable_ad_review', value, is_default=False)
+        logger.info(f"Updated enable_ad_review to: {value}")
+
+    if 'reviewModel' in data:
+        db.set_setting('review_model', data['reviewModel'], is_default=False)
+        logger.info(f"Updated review_model to: {data['reviewModel']}")
+
+    if 'reviewMaxBoundaryShift' in data:
+        try:
+            value = max(1, min(600, int(data['reviewMaxBoundaryShift'])))
+        except (TypeError, ValueError):
+            return error_response('reviewMaxBoundaryShift must be an integer', 400)
+        db.set_setting('review_max_boundary_shift', str(value), is_default=False)
+        logger.info(f"Updated review_max_boundary_shift to: {value}")
+    return None
+
+
+def _apply_model_fields(db, data):
+    """Persist primary model selections; whisper change marks model for reload."""
     if 'claudeModel' in data:
         db.set_setting('claude_model', data['claudeModel'], is_default=False)
         logger.info(f"Updated Claude model to: {data['claudeModel']}")
@@ -292,6 +465,14 @@ def update_ad_detection_settings():
         except Exception as e:
             logger.warning(f"Could not mark model for reload: {e}")
 
+    if 'chaptersModel' in data:
+        db.set_setting('chapters_model', data['chaptersModel'], is_default=False)
+        logger.info(f"Updated chapters model to: {data['chaptersModel']}")
+    return None
+
+
+def _apply_processing_flags(db, data):
+    """Persist boolean processing toggles and the maxFeedEpisodes clamp."""
     if 'autoProcessEnabled' in data:
         value = 'true' if data['autoProcessEnabled'] else 'false'
         db.set_setting('auto_process_enabled', value, is_default=False)
@@ -331,17 +512,21 @@ def update_ad_detection_settings():
         value = 'true' if data['chaptersEnabled'] else 'false'
         db.set_setting('chapters_enabled', value, is_default=False)
         logger.info(f"Updated chapters generation to: {value}")
+    return None
 
-    if 'chaptersModel' in data:
-        db.set_setting('chapters_model', data['chaptersModel'], is_default=False)
-        logger.info(f"Updated chapters model to: {data['chaptersModel']}")
 
+def _apply_min_cut_confidence(db, data):
+    """Clamp min_cut_confidence to [0.50, 0.95]."""
     if 'minCutConfidence' in data:
         # Clamp to valid range (0.50 - 0.95)
         value = max(0.50, min(0.95, float(data['minCutConfidence'])))
         db.set_setting('min_cut_confidence', str(value), is_default=False)
         logger.info(f"Updated min cut confidence to: {value}")
+    return None
 
+
+def _apply_audio_normalize_fields(db, data):
+    """Audio loudness normalization (dynaudnorm second pass)."""
     if 'audioNormalizeEnabled' in data:
         value = 'true' if data['audioNormalizeEnabled'] else 'false'
         db.set_setting('audio_normalize_enabled', value, is_default=False)
@@ -356,7 +541,16 @@ def update_ad_detection_settings():
             )
         db.set_setting('audio_normalize_intensity', data['audioNormalizeIntensity'], is_default=False)
         logger.info(f"Updated audio normalize intensity to: {data['audioNormalizeIntensity']}")
+    return None
 
+
+def _apply_provider_fields(db, data):
+    """Persist LLM provider + base URL + key, then run post-change side effects.
+
+    On any provider-affecting change: clear cached json_format probe, force a
+    fresh client, probe again, refresh pricing in a background thread, and
+    prune any saved model ID that the new provider does not advertise.
+    """
     provider_changed = False
     if 'llmProvider' in data:
         valid_llm_providers = (
@@ -415,7 +609,18 @@ def update_ad_detection_settings():
                     db.reset_setting(setting_key)
         except Exception:
             logger.exception("Failed to prune stale model selections after provider change")
+    # The TTL cache backing get_effective_base_url / get_effective_provider
+    # lags writes by up to 5s. Without this invalidation, the GET /settings
+    # response that fires right after this PUT returns the pre-write value,
+    # the UI re-hydrates state to the stale value, hasChanges flips back to
+    # false, and the Save Changes button vanishes -- see issue #234.
+    from llm_client import invalidate_provider_cache
+    invalidate_provider_cache()
+    return None
 
+
+def _apply_whisper_fields(db, data):
+    """Persist whisper backend selection, API endpoint, key, model, language, compute type."""
     if 'whisperBackend' in data:
         valid_whisper_backends = (WHISPER_BACKEND_LOCAL, WHISPER_BACKEND_API)
         if data['whisperBackend'] not in valid_whisper_backends:
@@ -471,7 +676,11 @@ def update_ad_detection_settings():
         except Exception:
             logger.exception("Failed to mark Whisper model for reload after compute_type change")
         logger.info(f"Updated whisper compute type to: {ct_val}")
+    return None
 
+
+def _apply_vad_gap_fields(db, data):
+    """Persist VAD gap-detection toggle plus the three positive-float thresholds."""
     if 'vadGapDetectionEnabled' in data:
         raw = data['vadGapDetectionEnabled']
         if isinstance(raw, bool):
@@ -496,8 +705,11 @@ def update_ad_detection_settings():
             return json_response({'error': f'{field_name} must be a positive number'}, 400)
         db.set_setting(db_key, str(value), is_default=False)
         logger.info(f"Updated {db_key} to: {value}")
+    return None
 
-    # Chunked transcription tuning (parallel API path).
+
+def _apply_transcribe_chunk_fields(db, data):
+    """Chunked transcription tuning (parallel API path)."""
     for field_name, db_key, max_val in (
         ('transcribeMaxChunkSeconds', 'transcribe_max_chunk_seconds', 7200),
         ('transcribeConcurrentChunks', 'transcribe_concurrent_chunks', 32),
@@ -515,7 +727,11 @@ def update_ad_detection_settings():
             )
         db.set_setting(db_key, str(value), is_default=False)
         logger.info(f"Updated {db_key} to: {value}")
+    return None
 
+
+def _apply_podcast_index_fields(db, data):
+    """Persist Podcast Index API credentials via the secret writer."""
     if 'podcastIndexApiKey' in data:
         try:
             set_or_clear_secret(db, 'podcast_index_api_key', data['podcastIndexApiKey'])
@@ -529,8 +745,127 @@ def update_ad_detection_settings():
         except SecretWriteRejected:
             return error_response('provider_crypto_unavailable', 409)
         logger.info("Updated Podcast Index API secret")
+    return None
 
-    return json_response({'message': 'Settings updated'})
+
+def _effective_provider_after_update(data):
+    """Return the provider the user is settling on, considering an inline change.
+
+    Reads the DB directly (not via the cached helper) so a same-request
+    provider change is honored without waiting for the 5-second TTL.
+    """
+    candidate = data.get('llmProvider')
+    if candidate:
+        return candidate.lower()
+    db = get_database()
+    stored = db.get_setting('llm_provider')
+    if stored:
+        return stored.lower()
+    return os.environ.get('LLM_PROVIDER', 'anthropic').lower()
+
+
+def _apply_stage_tunables(db, data):
+    """Validate and persist per-stage tunable fields from the request payload.
+
+    Returns a Flask response on validation failure (400), or None on success.
+    """
+    from config import (
+        STAGE_TUNABLE_PAYLOAD_KEYS,
+        STAGE_TUNABLE_RANGES, STAGE_TUNABLE_REASONING_LEVELS,
+        get_stage_tunable,
+    )
+
+    # overlap >= size would make the derived step <= 0 and break create_windows.
+    if 'windowSizeSeconds' in data or 'windowOverlapSeconds' in data:
+        def _effective(payload_key, db_key):
+            if payload_key in data:
+                raw = data[payload_key]
+                if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+                    return get_stage_tunable(db_key)
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return None
+            return get_stage_tunable(db_key)
+
+        size_eff = _effective('windowSizeSeconds', 'window_size_seconds')
+        overlap_eff = _effective('windowOverlapSeconds', 'window_overlap_seconds')
+        if size_eff is not None and overlap_eff is not None and overlap_eff >= size_eff:
+            return json_response({
+                'error': 'windowOverlapSeconds must be less than windowSizeSeconds'
+            }, 400)
+
+    # Coercion + provider-gating per kind. Each tuple is
+    # (coerce_callable, error_message, provider_required, store_callable).
+    # provider_required: 'anthropic' / 'not_anthropic' / 'ollama' / None.
+    def _coerce_int(raw):  return int(raw)
+    def _coerce_float(raw): return float(raw)
+    def _coerce_level(raw):
+        n = str(raw).strip().lower()
+        if n not in STAGE_TUNABLE_REASONING_LEVELS:
+            raise ValueError(f"must be one of: {', '.join(sorted(STAGE_TUNABLE_REASONING_LEVELS))}")
+        return n
+
+    KIND_RULES = {
+        # kind:        (coerce,        type_msg,       provider_gate,    range_checked)
+        'float':       (_coerce_float, 'a number',     None,             True),
+        'int':         (_coerce_int,   'an integer',   None,             True),
+        'budget':      (_coerce_int,   'an integer',   'anthropic',      True),
+        'level':       (_coerce_level, None,           'not_anthropic',  False),
+        'ollama_ctx':  (_coerce_int,   'an integer',   'ollama',         True),
+    }
+
+    provider = None  # Lazy-resolve only when a provider-gated field is present.
+
+    def _check_provider_gate(gate, payload_key):
+        nonlocal provider
+        if gate is None:
+            return None
+        if provider is None:
+            provider = _effective_provider_after_update(data)
+        if gate == 'anthropic' and provider != 'anthropic':
+            return f'{payload_key} is only valid when llmProvider is anthropic'
+        if gate == 'not_anthropic' and provider == 'anthropic':
+            return f'{payload_key} is not valid when llmProvider is anthropic'
+        if gate == 'ollama' and provider != 'ollama':
+            return f'{payload_key} is only valid when llmProvider is ollama'
+        return None
+
+    for payload_key, db_key, kind in STAGE_TUNABLE_PAYLOAD_KEYS:
+        if payload_key not in data:
+            continue
+        raw = data[payload_key]
+
+        if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+            db.set_setting(db_key, "", is_default=True)
+            logger.info(f"Cleared {db_key}")
+            continue
+
+        coerce, type_msg, gate, range_checked = KIND_RULES[kind]
+
+        gate_err = _check_provider_gate(gate, payload_key)
+        if gate_err is not None:
+            return json_response({'error': gate_err}, 400)
+
+        try:
+            v = coerce(raw)
+        except (TypeError, ValueError) as e:
+            if type_msg is not None:
+                msg = f'{payload_key} must be {type_msg}'
+            else:
+                msg = f'{payload_key} {e}'
+            return json_response({'error': msg}, 400)
+
+        if range_checked:
+            lo, hi = STAGE_TUNABLE_RANGES[db_key]
+            if not (lo <= v <= hi):
+                return json_response(
+                    {'error': f'{payload_key} must be between {lo} and {hi}'}, 400
+                )
+
+        db.set_setting(db_key, str(v), is_default=False)
+        logger.info(f"Updated {db_key} to: {v!r}")
+    return None
 
 
 @api.route('/settings/ad-detection/reset', methods=['POST'])
@@ -594,6 +929,8 @@ def reset_prompts_only():
 
     db.reset_setting('system_prompt')
     db.reset_setting('verification_prompt')
+    db.reset_setting('review_prompt')
+    db.reset_setting('resurrect_prompt')
 
     logger.info("Reset prompts to defaults")
     return json_response({'message': 'Prompts reset to defaults'})
@@ -1058,3 +1395,137 @@ def test_webhook(webhook_id):
             'success': False,
             'message': 'webhook test failed; see server logs for details',
         })
+
+
+# ========== Ad Reviewer settings ==========
+
+@api.route('/settings/reviewer', methods=['GET'])
+@log_request
+def get_reviewer_settings():
+    """Return the ad-reviewer auto-update settings."""
+    db = get_database()
+    return json_response({
+        'updatePatternsFromReviewerAdjustments': db.get_setting_bool(
+            'update_patterns_from_reviewer_adjustments', default=True
+        ),
+        'minTrimThreshold': db.get_setting_float('min_trim_threshold', default=20.0),
+    })
+
+
+@api.route('/settings/reviewer', methods=['PUT'])
+@log_request
+def update_reviewer_settings():
+    """Update the ad-reviewer auto-update settings.
+
+    Body: {updatePatternsFromReviewerAdjustments: bool, minTrimThreshold: float}
+    """
+    db = get_database()
+    data = request.get_json() or {}
+    if 'updatePatternsFromReviewerAdjustments' in data:
+        v = bool(data['updatePatternsFromReviewerAdjustments'])
+        db.set_setting('update_patterns_from_reviewer_adjustments', 'true' if v else 'false')
+    if 'minTrimThreshold' in data:
+        try:
+            v = float(data['minTrimThreshold'])
+        except (TypeError, ValueError):
+            return error_response('minTrimThreshold must be a number', 400)
+        if v <= 0 or v > 120:
+            return error_response('minTrimThreshold must be between 1 and 120', 400)
+        db.set_setting('min_trim_threshold', str(v))
+    return get_reviewer_settings()
+
+
+# ========== Community-pattern sync settings ==========
+
+@api.route('/settings/community-sync', methods=['GET'])
+@log_request
+def get_community_sync_settings():
+    """Return the community-pattern sync settings."""
+    from community_sync import DEFAULT_CRON
+    db = get_database()
+    return json_response({
+        'enabled': db.get_setting_bool('community_sync_enabled', default=False),
+        'cron': db.get_setting('community_sync_cron') or DEFAULT_CRON,
+        'lastRun': db.get_setting('community_sync_last_run') or None,
+        'lastError': db.get_setting('community_sync_last_error') or None,
+        'manifestVersion': db.get_setting('community_sync_manifest_version') or None,
+        'lastSummary': db.get_setting('community_sync_last_summary') or None,
+    })
+
+
+@api.route('/settings/community-sync', methods=['PUT'])
+@log_request
+def update_community_sync_settings():
+    """Update community-pattern sync settings.
+
+    Body: {enabled?: bool, cron?: str}. Cron expression is validated.
+    """
+    from utils.cron import is_valid_expression
+    db = get_database()
+    data = request.get_json() or {}
+    if 'enabled' in data:
+        db.set_setting('community_sync_enabled', 'true' if bool(data['enabled']) else 'false')
+    if 'cron' in data:
+        cron = (data['cron'] or '').strip()
+        if not is_valid_expression(cron):
+            return error_response(f'invalid cron expression: {cron}', 400)
+        db.set_setting('community_sync_cron', cron)
+    return get_community_sync_settings()
+
+
+# ========== Community-pattern sync triggers ==========
+
+@api.route('/community-patterns/sync', methods=['POST'])
+@limiter.limit('6/hour')
+@log_request
+def trigger_community_pattern_sync():
+    """Force a sync now. Rate-limited to 6 calls per hour.
+
+    A 404 from the upstream manifest URL is expected when the repo hasn't
+    published `patterns/community/index.json` to its default branch yet
+    (e.g. the feature is still on a feature branch). Surface that as a
+    soft 200 with ``status: no_manifest_yet`` rather than a 502, since
+    the local instance is healthy and there's nothing the user can do.
+    """
+    import requests
+    from community_sync import sync_now
+    db = get_database()
+    try:
+        summary = sync_now(db)
+    except requests.HTTPError as e:
+        resp = e.response
+        if resp is not None and resp.status_code == 404:
+            return json_response({
+                'status': 'no_manifest_yet',
+                'message': 'Upstream has not published a manifest at this URL yet.',
+            })
+        return error_response({'message': 'Sync failed', 'reason': str(e)}, 502)
+    except Exception as e:
+        return error_response({'message': 'Sync failed', 'reason': str(e)}, 502)
+    return json_response(summary)
+
+
+@api.route('/community-patterns/sync-status', methods=['GET'])
+@log_request
+def community_pattern_sync_status():
+    """Return last-sync metadata."""
+    return get_community_sync_settings()
+
+
+@api.route('/community-patterns/all', methods=['DELETE'])
+@log_request
+def delete_all_community_patterns():
+    """Hard-delete every community pattern on this instance.
+
+    Body must include ``{"confirm": true}`` as a fat-finger guard, matching
+    the ``/patterns/bulk-delete`` convention. The UI provides the confirm
+    step; this endpoint enforces it for any direct API caller too.
+    """
+    payload = request.get_json(silent=True) or {}
+    if payload.get('confirm') is not True:
+        return error_response({
+            'message': 'confirm: true required to purge all community patterns'
+        }, 400)
+    db = get_database()
+    deleted = db.delete_all_community_patterns()
+    return json_response({'deleted': deleted})
