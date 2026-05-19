@@ -3,6 +3,18 @@ import { apiRequest, buildQueryString } from './client';
 export type InboxStatus = 'pending' | 'confirmed' | 'rejected' | 'adjusted';
 export type InboxStatusFilter = InboxStatus | 'all';
 
+// Lightweight peer descriptor: other ads on the same episode, regardless
+// of status. Used by the modal to render overlay markers showing where
+// already-actioned ads sit, and by the list view to hide pending ads
+// that fall fully inside a confirmed/adjusted peer's bounds.
+export interface InboxItemPeer {
+  adIndex: number;
+  start: number;
+  end: number;
+  sponsor: string | null;
+  status: InboxStatus;
+}
+
 export interface InboxItem {
   podcastSlug: string;
   podcastTitle: string;
@@ -22,6 +34,9 @@ export interface InboxItem {
   patternId: number | null;
   status: InboxStatus;
   correctedBounds: { start: number; end: number } | null;
+  // Other ads on the same episode (any status). Omitted by the backend
+  // when no peers exist, so check truthiness before iterating.
+  episodePeers?: InboxItemPeer[];
 }
 
 export interface InboxResponse {

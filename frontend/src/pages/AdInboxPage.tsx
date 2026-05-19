@@ -6,7 +6,11 @@ import {
   type InboxStatusFilter,
 } from '../api/adInbox';
 import LoadingSpinner from '../components/LoadingSpinner';
-import AdReviewModal, { type AdReviewItem, type AdReviewSubmit } from '../components/AdReviewModal';
+import AdReviewModal, {
+  type AdReviewItem,
+  type AdReviewSubmit,
+  type PeerAdMarker,
+} from '../components/AdReviewModal';
 import { submitCorrection } from '../api/patterns';
 
 const STATUS_TABS: { id: InboxStatusFilter; label: string }[] = [
@@ -173,10 +177,35 @@ function AdInboxPage() {
   });
 
   const allItems = data?.items ?? [];
-  const items = showSkipped
+  // An ad is "contained" when an episodePeer with status confirmed or
+  // adjusted (i.e. one you've already endorsed) fully encloses its
+  // time range. These are almost always redundant LLM re-detections
+  // of the same already-known ad, so we hide them from the pending
+  // list by default. Show-contained toggle below lets the user audit
+  // if needed. Only applies to status='pending' items -- the confirmed,
+  // rejected, etc. tabs always render the full set.
+  const isContainedByEndorsedPeer = (it: InboxItem): boolean => {
+    if (it.status !== 'pending') return false;
+    const peers = it.episodePeers;
+    if (!peers || peers.length === 0) return false;
+    return peers.some(
+      (p) => (p.status === 'confirmed' || p.status === 'adjusted')
+        && p.start <= it.start && p.end >= it.end,
+    );
+  };
+  const [showContained, setShowContained] = useState(false);
+  const containedCount = allItems.filter(isContainedByEndorsedPeer).length;
+
+  const afterSkippedFilter = showSkipped
     ? allItems
     : allItems.filter((it) => !skipped.has(itemKey(it)));
-  const skippedCount = allItems.length - items.length;
+  const items = showContained
+    ? afterSkippedFilter
+    : afterSkippedFilter.filter((it) => !isContainedByEndorsedPeer(it));
+  // Existing skippedCount semantic: how many session-skipped rows are
+  // hidden right now. Used by the existing "Show skipped" toggle copy.
+  const skippedCount = showSkipped ? 0 : (allItems.length - afterSkippedFilter.length);
+  const hiddenAsContainedCount = showContained ? 0 : (afterSkippedFilter.length - items.length);
   const counts = data?.counts;
   // Compute overlap peers from the full loaded set (not just visible)
   // so even hidden skipped items are considered when judging overlap.
@@ -396,6 +425,23 @@ function AdInboxPage() {
         </p>
       )}
 
+      {(hiddenAsContainedCount > 0 || (showContained && containedCount > 0)) && (
+        <div className="mb-3 flex items-center justify-between gap-2 text-xs text-muted-foreground bg-secondary/40 border border-border rounded-md px-3 py-2">
+          <span>
+            {showContained
+              ? `${containedCount} contained — these pending ads fall entirely inside a confirmed/adjusted ad on the same episode.`
+              : `${hiddenAsContainedCount} hidden as contained — pending detections that fall entirely inside a confirmed/adjusted ad on the same episode (very likely duplicates).`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowContained((v) => !v)}
+            className="px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors whitespace-nowrap"
+          >
+            {showContained ? 'Hide contained' : 'Show contained'}
+          </button>
+        </div>
+      )}
+
       {isLoading ? (
         <LoadingSpinner className="py-12" />
       ) : error ? (
@@ -543,6 +589,15 @@ function AdInboxPage() {
           key={itemKey(activeItem)}
           item={inboxItemToReviewItem(activeItem)}
           episodeDuration={activeItem.originalDuration ?? undefined}
+          peerAds={
+            activeItem.episodePeers?.map<PeerAdMarker>((p) => ({
+              adIndex: p.adIndex,
+              start: p.start,
+              end: p.end,
+              sponsor: p.sponsor,
+              status: p.status,
+            }))
+          }
           onClose={closeModal}
           onSubmit={async (s) => {
             await applySubmission(activeItem, s);

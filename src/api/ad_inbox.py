@@ -56,11 +56,36 @@ def get_ad_inbox():
     # Title-keyed-by-slug so the dropdown is stable when multiple episodes
     # share a podcast (which they always do).
     podcasts_with_matches: dict[str, str] = {}
+    # By-episode map of *all* enumerated items (regardless of status) so
+    # we can attach cross-status peers to each kept item below. Without
+    # this, the modal only sees same-status siblings -- but the most
+    # valuable peer information is e.g. "this pending ad is inside a
+    # confirmed one" which lives across status tabs.
+    by_episode: dict[str, list[dict]] = {}
     for item in enumerate_inbox_items(db):
         counts[item['status']] = counts.get(item['status'], 0) + 1
+        by_episode.setdefault(item['episodeId'], []).append(item)
         if status_filter == 'all' or item['status'] == status_filter:
             matched_by_status.append(item)
             podcasts_with_matches[item['podcastSlug']] = item['podcastTitle']
+
+    # Attach a lightweight peer list to each item: every *other* ad on
+    # the same episode, regardless of status. Only emitted when peers
+    # exist, so single-ad episodes don't carry an empty array.
+    for item in matched_by_status:
+        peers = [
+            {
+                'adIndex': p['adIndex'],
+                'start': p['start'],
+                'end': p['end'],
+                'sponsor': p.get('sponsor'),
+                'status': p['status'],
+            }
+            for p in by_episode.get(item['episodeId'], [])
+            if p['adIndex'] != item['adIndex']
+        ]
+        if peers:
+            item['episodePeers'] = peers
 
     # Apply the podcast filter ON TOP of the status filter. We compute
     # podcastsWithMatches *before* this step so the dropdown always shows

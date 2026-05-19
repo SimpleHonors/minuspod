@@ -84,7 +84,41 @@ interface Props {
   // Optional: surface a "+ Add new ad" entry inside the modal so the
   // user can switch into create mode without closing the modal first.
   onAddNew?: () => void;
+  // Optional list of OTHER ads on the same episode -- regardless of
+  // status. Used to render passive overlay markers across the top of
+  // the waveform so the user can see at a glance which sections have
+  // already been triaged (confirmed/adjusted/rejected) vs. which are
+  // sibling pending detections. Markers are passive: clicking does
+  // nothing -- they're just visual context.
+  peerAds?: PeerAdMarker[];
 }
+
+// Slim shape used purely for waveform overlay rendering. Keep
+// independent from AdReviewItem so the modal doesn't pull in
+// inbox-specific fields just to show markers.
+export interface PeerAdMarker {
+  adIndex: number;
+  start: number;
+  end: number;
+  sponsor: string | null;
+  status: 'pending' | 'confirmed' | 'rejected' | 'adjusted';
+}
+
+// Tailwind class palette per status. Defined as static strings so the
+// JIT actually emits the corresponding CSS (a `bg-${color}-500` template
+// literal would silently fail at build time).
+const PEER_BAR_CLASS: Record<PeerAdMarker['status'], string> = {
+  confirmed: 'bg-emerald-500/60 border-emerald-400',
+  adjusted: 'bg-sky-500/60 border-sky-400',
+  rejected: 'bg-rose-500/60 border-rose-400',
+  pending: 'bg-amber-400/50 border-amber-300',
+};
+const PEER_LABEL_CLASS: Record<PeerAdMarker['status'], string> = {
+  confirmed: 'text-emerald-50 bg-emerald-700/90',
+  adjusted: 'text-sky-50 bg-sky-700/90',
+  rejected: 'text-rose-50 bg-rose-700/90',
+  pending: 'text-amber-50 bg-amber-700/90',
+};
 
 // Cap the default visible window. Some heuristic detections (notably
 // post-roll) flag dozens of minutes as a single "ad", which would make
@@ -114,6 +148,7 @@ function AdReviewModal({
   audioMode = 'original', onAudioModeChange, hasOriginal = true,
   processedAudioUrl, episodeDuration,
   mode = 'review', onCreate, onAddNew,
+  peerAds,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
@@ -1047,6 +1082,50 @@ function AdReviewModal({
                 className="overflow-x-auto"
               >
                 <div className="relative min-w-full" ref={overlayRef}>
+                  {/* Peer-ad markers: a thin colored strip per other ad
+                      on this episode. Strictly visual context -- no
+                      interaction. Helps the user spot when a current
+                      pending detection overlaps an already-confirmed
+                      ad on the same episode. Renders ONLY peers that
+                      intersect the visible window. Sits at the very
+                      top so it doesn't fight pinheads or the cursor. */}
+                  {peerAds && peerAds.length > 0 && (() => {
+                    const winDur = windowEnd - windowStart;
+                    if (winDur <= 0) return null;
+                    return (
+                      <div
+                        className="absolute top-0 inset-x-0 h-3 z-[1] pointer-events-none"
+                        aria-hidden
+                      >
+                        {peerAds.map((peer) => {
+                          if (peer.end <= windowStart || peer.start >= windowEnd) return null;
+                          const clampedStart = Math.max(peer.start, windowStart);
+                          const clampedEnd = Math.min(peer.end, windowEnd);
+                          const leftPct = ((clampedStart - windowStart) / winDur) * 100;
+                          const widthPct = ((clampedEnd - clampedStart) / winDur) * 100;
+                          const label = peer.sponsor || 'unknown';
+                          const statusGlyph =
+                            peer.status === 'confirmed' ? '✓' :
+                            peer.status === 'adjusted' ? '✎' :
+                            peer.status === 'rejected' ? '✗' : '·';
+                          return (
+                            <div
+                              key={peer.adIndex}
+                              className={`absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-hidden pointer-events-auto`}
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              title={`${label} · ${peer.status} · ${formatTime(peer.start)}–${formatTime(peer.end)}`}
+                            >
+                              {widthPct > 6 && (
+                                <span className={`text-[9px] font-bold leading-3 px-1 truncate ${PEER_LABEL_CLASS[peer.status]}`}>
+                                  {statusGlyph} {label}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   {/* Header strip -- gives the pinheads a place to live INSIDE
                       the overlay's box (so they aren't clipped by the
                       enclosing overflow-x-auto scroll container). */}
