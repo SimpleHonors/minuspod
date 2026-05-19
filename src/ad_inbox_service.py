@@ -104,6 +104,7 @@ def enumerate_inbox_items(db) -> Iterator[dict]:
                 'episodeTitle': row['episode_title'],
                 'publishedAt': row['published_at'],
                 'processedVersion': row['processed_version'],
+                'originalDuration': row['original_duration'],
                 'adIndex': idx,
                 'start': start,
                 'end': end,

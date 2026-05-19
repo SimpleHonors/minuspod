@@ -10,6 +10,7 @@ export interface InboxItem {
   episodeTitle: string | null;
   publishedAt: string | null;
   processedVersion: number | null;
+  originalDuration: number | null;
   adIndex: number;
   start: number;
   end: number;

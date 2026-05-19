@@ -131,7 +131,21 @@ function AdReviewModal({
   // zoom; the user can still zoom out or expand by typing distant times.
   const defaults = useMemo(() => {
     const fullDuration = Math.max(0, episodeDuration ?? 0);
-    const safeEnd = fullDuration > 0 ? fullDuration : DEFAULT_MAX_WINDOW_SECONDS;
+    // When the host didn't pass episodeDuration, fall back to a value
+    // that's always >= the ad's natural window so the Math.min() below
+    // never truncates windowEnd below item.start. Using
+    // DEFAULT_MAX_WINDOW_SECONDS as an absolute time bound was a bug:
+    // for any ad starting past 360s it forced windowEnd < item.start
+    // and the peaks API rejected the request as start > end.
+    const windowStartCandidate = mode === 'create'
+      ? 0
+      : Math.max(0, item.start - CONTEXT_SECONDS);
+    const naturalEndCandidate = mode === 'create'
+      ? DEFAULT_MAX_WINDOW_SECONDS
+      : item.end + CONTEXT_SECONDS;
+    const safeEnd = fullDuration > 0
+      ? fullDuration
+      : Math.max(naturalEndCandidate, windowStartCandidate + DEFAULT_MAX_WINDOW_SECONDS);
     if (mode === 'create') {
       return {
         windowStart: 0,
@@ -140,8 +154,8 @@ function AdReviewModal({
         adEnd: Math.min(60, safeEnd),
       };
     }
-    const windowStart = Math.max(0, item.start - CONTEXT_SECONDS);
-    const naturalEnd = item.end + CONTEXT_SECONDS;
+    const windowStart = windowStartCandidate;
+    const naturalEnd = naturalEndCandidate;
     const cappedEnd = windowStart + DEFAULT_MAX_WINDOW_SECONDS;
     return {
       windowStart,

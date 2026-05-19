@@ -585,17 +585,18 @@ class EpisodeMixin:
         Skips rows with no markers. Returns rows with the columns:
         ``episode_id``, ``podcast_slug``, ``podcast_title``, ``episode_title``,
         ``published_at``, ``ad_markers_json`` (raw JSON string),
-        ``processed_version``.
+        ``processed_version``, ``original_duration``.
         """
         conn = self.get_connection()
         cursor = conn.execute(
             """SELECT e.episode_id,
-                      e.title          AS episode_title,
+                      e.title              AS episode_title,
                       e.published_at,
                       e.processed_version,
+                      e.original_duration,
                       ed.ad_markers_json,
-                      p.slug           AS podcast_slug,
-                      p.title          AS podcast_title
+                      p.slug               AS podcast_slug,
+                      p.title              AS podcast_title
                FROM episode_details ed
                JOIN episodes e ON e.id = ed.episode_id
                JOIN podcasts p ON p.id = e.podcast_id

@@ -340,6 +340,7 @@ function AdInboxPage() {
         <AdReviewModal
           key={itemKey(activeItem)}
           item={inboxItemToReviewItem(activeItem)}
+          episodeDuration={activeItem.originalDuration ?? undefined}
           onClose={closeModal}
           onSubmit={async (s) => {
             await applySubmission(activeItem, s);
