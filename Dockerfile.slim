@@ -14,7 +14,7 @@ RUN mkdir -p /app/static/ui/swagger \
     && (cp /app/frontend/node_modules/swagger-ui-dist/swagger-ui-bundle.js /app/static/ui/swagger/ 2>/dev/null || true) \
     && (cp /app/frontend/node_modules/swagger-ui-dist/swagger-ui-standalone-preset.js /app/static/ui/swagger/ 2>/dev/null || true)
 
-FROM minuspod:2.4.7-normalize-combined-20260515
+FROM minuspod:test-merge-20260519-9
 
 WORKDIR /app
 COPY src/ ./src/
