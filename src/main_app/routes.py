@@ -216,7 +216,8 @@ def register_routes(app):
     @log_request_detailed
     def serve_combined_rss():
         """Serve a unified RSS feed combining all processed episodes."""
-        db, storage, rss_parser, _ = _get_components()
+        # db, storage, rss_parser are picked up from module-level imports (line 43).
+        # The audit removed the local _get_components helper; this route was missed.
 
         try:
             limit = int(db.get_setting('combined_feed_episode_limit') or '50')
