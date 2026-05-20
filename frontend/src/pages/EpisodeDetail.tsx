@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getEpisode, getOriginalTranscript, reprocessEpisode, regenerateChapters } from '../api/feeds';
+import { getEpisode, getFeed, getOriginalTranscript, reprocessEpisode, regenerateChapters } from '../api/feeds';
 import { submitCorrection } from '../api/patterns';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Artwork from '../components/Artwork';
@@ -53,6 +53,15 @@ function EpisodeDetail() {
     queryKey: ['episode', slug, episodeId],
     queryFn: () => getEpisode(slug!, episodeId!),
     enabled: !!slug && !!episodeId,
+  });
+
+  // Feed query is used only for its ``artworkUrl`` field; the API returns
+  // either the cached endpoint path or the upstream URL depending on cache
+  // state, mirroring the dashboard fallback chain.
+  const { data: feed } = useQuery({
+    queryKey: ['feed', slug],
+    queryFn: () => getFeed(slug!),
+    enabled: !!slug,
   });
 
   const { data: originalTranscript, isError: originalTranscriptError } = useQuery({
@@ -221,7 +230,7 @@ function EpisodeDetail() {
         <div className="flex gap-4">
           <div className="w-16 h-16 sm:w-24 sm:h-24 shrink-0">
             <Artwork
-              src={`/api/v1/feeds/${slug}/artwork`}
+              src={feed?.artworkUrl || `/api/v1/feeds/${slug}/artwork`}
               alt="Podcast artwork"
               className="w-full h-full object-cover rounded-lg"
             />
@@ -368,22 +377,29 @@ function EpisodeDetail() {
               createMode={true}
             />
           ) : (
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <h2 className="text-lg font-semibold text-foreground">No ads detected</h2>
                 <p className="text-sm text-muted-foreground">
                   Spotted an ad the detector missed? Mark it manually so the pattern matcher learns it.
                 </p>
               </div>
+              {/* Icon-only on mobile, full label on sm:+. Mirrors AdReviewModal. */}
               <button
+                type="button"
                 onClick={() => {
                   setSavedScrollY(window.scrollY);
                   setCreateModeRequested(true);
                   setShowEditor(true);
                 }}
-                className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                aria-label="Add new ad"
+                title="Add new ad"
+                className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors whitespace-nowrap"
               >
-                + Add new ad
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span className="hidden sm:inline">Add new ad</span>
               </button>
             </div>
           )}
