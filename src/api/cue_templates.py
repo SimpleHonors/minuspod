@@ -168,6 +168,91 @@ def delete_cue_template_route(template_id):
 
 
 @api.route(
+    '/feeds/<slug>/episodes/<episode_id>/cue-scan',
+    methods=['POST'],
+)
+@log_request
+def cue_scan_episode(slug, episode_id):
+    """Run every enabled cue template for the feed against an episode.
+
+    Test-mode endpoint: returns matches per template AND each template's peak
+    correlation against the episode (even when below the threshold) so the
+    user can see how close a non-matching template came. Optional body field
+    ``scoreThreshold`` overrides the global threshold for this run only --
+    handy for sweeping values without re-saving settings.
+    """
+    if not is_valid_episode_id(episode_id):
+        abort(400)
+    db = get_database()
+    storage = get_storage()
+    podcast = db.get_podcast_by_slug(slug)
+    if not podcast:
+        return error_response('feed not found', 404)
+    episode = db.get_episode(slug, episode_id)
+    if not episode or not episode.get('original_file'):
+        return error_response('original audio not retained for this episode', 404)
+    audio_path = storage.get_original_path(slug, episode_id)
+    if not audio_path.exists():
+        return error_response('original audio file missing', 404)
+
+    templates = db.list_cue_templates(podcast['id'], include_disabled=False)
+    if not templates:
+        return error_response(
+            'this feed has no enabled cue templates', 400,
+        )
+
+    from audio_analysis.cue_template_matcher import (
+        AudioCueTemplateMatcher, DEFAULT_MATCH_SCORE,
+    )
+    payload = request.get_json(silent=True) or {}
+    override = payload.get('scoreThreshold')
+    if override is not None:
+        try:
+            score = max(0.0, min(0.99, float(override)))
+        except (TypeError, ValueError):
+            return error_response('scoreThreshold must be a number', 400)
+    else:
+        score = db.get_setting_float('audio_cue_template_score', DEFAULT_MATCH_SCORE)
+    matcher = AudioCueTemplateMatcher(
+        templates=templates, score_threshold=score,
+    )
+    if not matcher.is_usable:
+        return error_response('templates could not be loaded', 500)
+    signals, debug = matcher.detect_with_debug(str(audio_path))
+    # Group matches by template_id so the UI can render one row per template.
+    by_template: dict = {t['id']: [] for t in templates}
+    for s in signals:
+        tid = (s.details or {}).get('template_id')
+        if tid in by_template:
+            by_template[tid].append({
+                'start': s.start,
+                'end': s.end,
+                'confidence': s.confidence,
+                'score': (s.details or {}).get('score', s.confidence),
+            })
+    return json_response({
+        'episodeId': episode_id,
+        'thresholdUsed': debug['threshold'],
+        'elapsedSeconds': debug['elapsed_s'],
+        'templates': [
+            {
+                'id': t['id'],
+                'label': t['label'],
+                'durationS': t['duration_s'],
+                'peakScore': next(
+                    (d['peak_score'] for d in debug['templates']
+                     if d['id'] == t['id']),
+                    0.0,
+                ),
+                'matchCount': len(by_template.get(t['id'], [])),
+                'matches': by_template.get(t['id'], []),
+            }
+            for t in templates
+        ],
+    })
+
+
+@api.route(
     '/feeds/<slug>/episodes/<episode_id>/cue-template-preview',
     methods=['POST'],
 )
@@ -212,9 +297,14 @@ def preview_cue_template(slug, episode_id):
     )
     if not matcher.is_usable:
         return error_response('template could not be loaded', 500)
-    signals = matcher.detect(str(audio_path))
+    signals, debug = matcher.detect_with_debug(str(audio_path))
     return json_response({
         'templateId': template_id,
+        'thresholdUsed': debug['threshold'],
+        'peakScore': next(
+            (d['peak_score'] for d in debug['templates'] if d['id'] == template_id),
+            0.0,
+        ),
         'matches': [
             {
                 'start': s.start,

@@ -82,3 +82,32 @@ export async function previewCueTemplate(
     { method: 'POST', body: { templateId } },
   );
 }
+
+export interface CueScanTemplateResult {
+  id: number;
+  label: string;
+  durationS: number;
+  peakScore: number;
+  matchCount: number;
+  matches: CueTemplateMatch[];
+}
+
+export interface CueScanResponse {
+  episodeId: string;
+  thresholdUsed: number;
+  elapsedSeconds: number;
+  templates: CueScanTemplateResult[];
+}
+
+export async function scanEpisodeCues(
+  slug: string,
+  episodeId: string,
+  scoreThreshold?: number,
+): Promise<CueScanResponse> {
+  const body: Record<string, unknown> = {};
+  if (scoreThreshold !== undefined) body.scoreThreshold = scoreThreshold;
+  return apiRequest<CueScanResponse>(
+    `/feeds/${slug}/episodes/${episodeId}/cue-scan`,
+    { method: 'POST', body },
+  );
+}

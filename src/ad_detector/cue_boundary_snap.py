@@ -1,15 +1,14 @@
-"""Snap detected ad start edges to nearby audio cues (#350 v2).
+"""Snap detected ad edges to nearby audio cues (#350 v2).
 
-A short ding or stinger usually plays *just before* the ad copy starts. When
-the cue detector flags one within a small window of an LLM-detected ad's
-``start``, we snap ``start`` to the cue end so the cut lands on the chime
-boundary rather than a beat into the spoken copy.
+Many shows play a short ding or stinger right before an ad break starts and
+another right when content resumes. When the cue detector flags one within a
+small window of an LLM-detected ad's ``start`` or ``end``, we snap the edge
+to the matching side of the cue so the cut lands on the chime boundary
+rather than a beat into / out of the spoken copy.
 
-This is start-edge only; the end edge stays at the model's choice unless a
-later iteration adds outro-cue handling. The maximum snap distance is hard-
-capped by ``max_boundary_shift_seconds`` (the same setting the reviewer pass
-honors) so a misfiring cue cannot warp the boundary by more than the user-
-permitted amount.
+Both edges are bounded by ``max_boundary_shift_seconds`` (the same setting
+the reviewer pass honors) so a misfiring cue cannot warp the boundary by
+more than the user-permitted amount.
 
 Pure function over ad dicts and audio signals; no DB, no LLM, no IO.
 """
@@ -35,26 +34,26 @@ SNAP_GAP_SECONDS = 0.05
 MIN_CUE_CONFIDENCE_FOR_SNAP = 0.80
 
 
-def snap_ad_starts_to_cues(
+def snap_ad_boundaries_to_cues(
     ads: List[Dict],
     audio_analysis_result,
     max_boundary_shift_s: float,
     snap_lead_s: float = DEFAULT_SNAP_LEAD_SECONDS,
     snap_lag_s: float = DEFAULT_SNAP_LAG_SECONDS,
 ) -> List[Dict]:
-    """Return ``ads`` with each ``start`` snapped to a nearby cue end when one exists.
+    """Return ``ads`` with each ``start`` and ``end`` snapped to a nearby cue.
 
-    Each ad keeps a record of the snap in ``ad['cue_snap']`` so downstream
-    logging and the UI can show why the boundary moved.
+    Start snap: ad start moves to the cue's *end* + a tiny lead so the cut
+    lands just after the stinger finishes.
 
-    Args:
-        ads: List of ad dicts (``start``, ``end``, …). Mutated in place but
-            also returned for ergonomics.
-        audio_analysis_result: ``AudioAnalysisResult`` from the analyzer, or
-            ``None`` to no-op.
-        max_boundary_shift_s: Hard cap on absolute snap distance.
-        snap_lead_s: Window before ``start`` to search for a cue end.
-        snap_lag_s: Window after ``start`` to search for a cue end.
+    End snap: ad end moves to the cue's *start* so the cut lands at the
+    moment the resume-content stinger begins (its decay belongs to the
+    content side of the break).
+
+    Each shifted ad records the snap in ``ad['cue_snap']`` so the UI / logs
+    can show why the boundary moved. A cue used for the start snap of an
+    ad is excluded from the end snap of the same ad so the same cue can't
+    drag both edges to itself.
     """
     if not ads or not audio_analysis_result:
         return ads
@@ -68,41 +67,91 @@ def snap_ad_starts_to_cues(
     for ad in ads:
         try:
             original_start = float(ad['start'])
+            original_end = float(ad['end'])
         except (KeyError, TypeError, ValueError):
             continue
-        ad_end = ad.get('end')
-        candidate = _pick_cue_for_start(
-            cues, original_start, ad_end, snap_lead_s, snap_lag_s,
+
+        used_cue_ids: set = set()
+        snap_record: Dict = {}
+
+        # --- Start edge -------------------------------------------------
+        start_cue = _pick_cue_for_start(
+            cues, original_start, original_end, snap_lead_s, snap_lag_s,
         )
-        if candidate is None:
-            continue
-        proposed_start = candidate.end + SNAP_GAP_SECONDS
-        # Never push past the ad's end.
-        if ad_end is not None and proposed_start >= float(ad_end):
-            continue
-        shift = abs(proposed_start - original_start)
-        if shift > max_boundary_shift_s:
-            continue
-        if shift < 0.01:
-            continue
-        ad['start'] = round(proposed_start, 3)
-        ad['cue_snap'] = {
-            'original_start': round(original_start, 3),
-            'cue_start': round(candidate.start, 3),
-            'cue_end': round(candidate.end, 3),
-            'cue_confidence': round(candidate.confidence, 3),
-            'shift_seconds': round(proposed_start - original_start, 3),
-            'template_id': (candidate.details or {}).get('template_id'),
-            'label': (candidate.details or {}).get('label'),
-            'source': (candidate.details or {}).get('source', 'spectral'),
-        }
-        logger.info(
-            f"Cue snap: ad start {original_start:.3f}s -> {proposed_start:.3f}s "
-            f"(Δ={proposed_start - original_start:+.3f}s, "
-            f"cue={ad['cue_snap'].get('label') or 'spectral'}, "
-            f"conf={candidate.confidence:.2f})"
+        new_start = original_start
+        if start_cue is not None:
+            proposed_start = start_cue.end + SNAP_GAP_SECONDS
+            shift = abs(proposed_start - original_start)
+            if (
+                proposed_start < original_end
+                and shift <= max_boundary_shift_s
+                and shift >= 0.01
+            ):
+                new_start = round(proposed_start, 3)
+                snap_record['start'] = {
+                    'original': round(original_start, 3),
+                    'cue_start': round(start_cue.start, 3),
+                    'cue_end': round(start_cue.end, 3),
+                    'cue_confidence': round(start_cue.confidence, 3),
+                    'shift_seconds': round(proposed_start - original_start, 3),
+                    'template_id': (start_cue.details or {}).get('template_id'),
+                    'label': (start_cue.details or {}).get('label'),
+                    'source': (start_cue.details or {}).get('source', 'spectral'),
+                }
+                used_cue_ids.add(id(start_cue))
+                logger.info(
+                    f"Cue snap (start): {original_start:.3f}s -> {new_start:.3f}s "
+                    f"(Δ={new_start - original_start:+.3f}s, "
+                    f"cue={snap_record['start'].get('label') or 'spectral'}, "
+                    f"conf={start_cue.confidence:.2f})"
+                )
+
+        # --- End edge ---------------------------------------------------
+        end_cue = _pick_cue_for_end(
+            cues, original_end, new_start, snap_lead_s, snap_lag_s,
+            exclude_ids=used_cue_ids,
         )
+        new_end = original_end
+        if end_cue is not None:
+            # End snap lands on the resume-content stinger's START so the
+            # break ends just before the stinger plays. Its decay stays
+            # with the content side.
+            proposed_end = end_cue.start - SNAP_GAP_SECONDS
+            shift = abs(proposed_end - original_end)
+            if (
+                proposed_end > new_start
+                and shift <= max_boundary_shift_s
+                and shift >= 0.01
+            ):
+                new_end = round(proposed_end, 3)
+                snap_record['end'] = {
+                    'original': round(original_end, 3),
+                    'cue_start': round(end_cue.start, 3),
+                    'cue_end': round(end_cue.end, 3),
+                    'cue_confidence': round(end_cue.confidence, 3),
+                    'shift_seconds': round(proposed_end - original_end, 3),
+                    'template_id': (end_cue.details or {}).get('template_id'),
+                    'label': (end_cue.details or {}).get('label'),
+                    'source': (end_cue.details or {}).get('source', 'spectral'),
+                }
+                logger.info(
+                    f"Cue snap (end): {original_end:.3f}s -> {new_end:.3f}s "
+                    f"(Δ={new_end - original_end:+.3f}s, "
+                    f"cue={snap_record['end'].get('label') or 'spectral'}, "
+                    f"conf={end_cue.confidence:.2f})"
+                )
+
+        if snap_record:
+            ad['start'] = new_start
+            ad['end'] = new_end
+            ad['cue_snap'] = snap_record
+
     return ads
+
+
+# Backwards-compatible alias: existing callers and tests reference the
+# old name. The implementation now handles both edges.
+snap_ad_starts_to_cues = snap_ad_boundaries_to_cues
 
 
 def _pick_cue_for_start(
@@ -124,8 +173,44 @@ def _pick_cue_for_start(
             continue
         if ad_end is not None and cue_end >= float(ad_end):
             continue
-        # Prefer higher confidence, then closer to ad_start.
         key = (cue.confidence, -abs(cue_end - ad_start))
+        if best_key is None or key > best_key:
+            best = cue
+            best_key = key
+    return best
+
+
+def _pick_cue_for_end(
+    cues: List, ad_end: float, ad_start: float,
+    snap_lead_s: float, snap_lag_s: float,
+    exclude_ids: set,
+):
+    """Find the best cue to snap ``ad_end`` to.
+
+    A cue whose START sits within ``[ad_end - lag, ad_end + lead]`` is a
+    candidate -- the resume-content stinger plays at break boundary so its
+    start marks where content returns. Cues already used for the start
+    snap of this ad are excluded so the same cue cannot collapse the ad
+    to a single instant. Cues whose start is before ``ad_start`` cannot
+    bound the end edge.
+    """
+    # The end-side stinger can sit a beat before the LLM's end (snap_lag)
+    # because the LLM tends to overshoot into post-break silence, or a beat
+    # after it (snap_lead) because the LLM sometimes cuts at the last word
+    # of the ad copy and the stinger plays a moment later.
+    low = ad_end - snap_lag_s
+    high = ad_end + snap_lead_s
+    best = None
+    best_key = None
+    for cue in cues:
+        if id(cue) in exclude_ids:
+            continue
+        cue_start = cue.start
+        if cue_start < low or cue_start > high:
+            continue
+        if cue_start <= ad_start:
+            continue
+        key = (cue.confidence, -abs(cue_start - ad_end))
         if best_key is None or key > best_key:
             best = cue
             best_key = key

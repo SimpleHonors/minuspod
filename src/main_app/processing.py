@@ -377,18 +377,39 @@ def _detect_ads_first_pass(ctx, segments, audio_path,
     else:
         audio_logger.info(f"[{slug}:{episode_id}] First pass: No ads detected")
 
-    # Snap ad starts to nearby audio cues when the analyzer flagged any.
+    # Cue-pair ad synthesis (opt-in): when the LLM missed a break that the
+    # cue matcher bracketed with two high-confidence cues, materialize a
+    # synthetic ad spanning the pair so downstream cuts include the missed
+    # break. Off by default because it breaks the "cue is supporting
+    # evidence only" contract; enable per-feed when the matcher is reliable.
+    if audio_analysis_result and db.get_setting_bool('audio_cue_create_from_pairs', default=False):
+        try:
+            from ad_detector.cue_pair_ads import synthesize_ads_from_cue_pairs
+            updated = synthesize_ads_from_cue_pairs(first_pass_ads, audio_analysis_result)
+            added = len(updated) - len(first_pass_ads)
+            if added:
+                audio_logger.info(
+                    f"[{slug}:{episode_id}] Cue pair: synthesised {added} ad(s) "
+                    f"from unmatched cue pairs"
+                )
+            first_pass_ads = updated
+        except Exception as e:
+            audio_logger.warning(
+                f"[{slug}:{episode_id}] Cue pair synthesis skipped: {e}"
+            )
+
+    # Snap both ad edges to nearby audio cues when the analyzer flagged any.
     # Capped by the reviewer's max_boundary_shift setting so a misfiring cue
     # cannot warp the boundary beyond what the user has authorised.
     if first_pass_ads and audio_analysis_result:
         try:
-            from ad_detector.cue_boundary_snap import snap_ad_starts_to_cues
+            from ad_detector.cue_boundary_snap import snap_ad_boundaries_to_cues
             raw_cap = db.get_setting('review_max_boundary_shift')
             try:
                 max_shift = float(raw_cap) if raw_cap is not None else 60.0
             except (TypeError, ValueError):
                 max_shift = 60.0
-            snap_ad_starts_to_cues(first_pass_ads, audio_analysis_result, max_shift)
+            snap_ad_boundaries_to_cues(first_pass_ads, audio_analysis_result, max_shift)
         except Exception as e:
             audio_logger.warning(
                 f"[{slug}:{episode_id}] Cue boundary snap skipped: {e}"
@@ -582,7 +603,8 @@ def _build_reviewer(db, ad_detector) -> AdReviewer:
 
 
 def _build_episode_meta(slug, episode_id, podcast_id, podcast_name,
-                        episode_title, podcast_description, episode_description):
+                        episode_title, podcast_description, episode_description,
+                        audio_analysis=None):
     return {
         'podcast_name': podcast_name,
         'episode_title': episode_title,
@@ -591,6 +613,11 @@ def _build_episode_meta(slug, episode_id, podcast_id, podcast_name,
         'slug': slug,
         'episode_id': episode_id,
         'podcast_id': podcast_id,
+        # Optional: the reviewer renders any audio_cue signals near an ad's
+        # boundaries into the per-ad user prompt. Pass-2 leaves this None
+        # because its analysis is in processed-audio coordinates that don't
+        # align with the original-audio ad spans the reviewer sees.
+        'audio_analysis': audio_analysis,
     }
 
 
@@ -797,7 +824,8 @@ def _merge_reviewer_result(result, all_ads_with_validation):
 def _run_ad_reviewer(slug, episode_id, podcast_id, ads_to_remove,
                      all_ads_with_validation, segments, podcast_name,
                      episode_title, episode_description, podcast_description,
-                     min_cut_confidence, pass_num, pass_model):
+                     min_cut_confidence, pass_num, pass_model,
+                     audio_analysis=None):
     """Run the LLM ad reviewer over the cut list and resurrection-eligible
     rejects. Returns updated ``(ads_to_remove, all_ads_with_validation)``.
 
@@ -826,6 +854,7 @@ def _run_ad_reviewer(slug, episode_id, podcast_id, ads_to_remove,
     episode_meta = _build_episode_meta(
         slug, episode_id, podcast_id, podcast_name,
         episode_title, podcast_description, episode_description,
+        audio_analysis=audio_analysis,
     )
     result = reviewer.review(
         accepted_ads=ads_to_remove,
@@ -1155,6 +1184,8 @@ def _run_verification_pass(ctx, processed_path, pass1_cuts,
             audio_analyzer=audio_analyzer, pattern_service=pattern_service,
             db=db,
         )
+        podcast_row = db.get_podcast_by_slug(slug)
+        feed_id = podcast_row.get('id') if podcast_row else None
         verification_result = verifier.verify(
             processed_audio_path=processed_path,
             podcast_name=podcast_name, episode_title=episode_title,
@@ -1166,6 +1197,7 @@ def _run_verification_pass(ctx, processed_path, pass1_cuts,
             progress_callback=progress_callback,
             original_segments=original_segments,
             reuse_transcript=reuse_transcript,
+            feed_id=feed_id,
         )
         verification_ads_original = verification_result.get('ads', [])
         verification_ads_processed = verification_result.get('ads_processed', [])
@@ -1682,6 +1714,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
                 episode_title, episode_description, podcast_description,
                 min_cut_confidence, pass_num=1,
                 pass_model=ad_detector.get_model(),
+                audio_analysis=audio_analysis_result,
             )
             _check_cancel(cancel_event, slug, episode_id)
 

@@ -6,7 +6,9 @@ import CueMarkModal from '../../components/CueMarkModal';
 import {
   deleteCueTemplate,
   listCueTemplates,
+  scanEpisodeCues,
   updateCueTemplate,
+  type CueScanResponse,
   type CueTemplate,
 } from '../../api/cueTemplates';
 import { getEpisode, getEpisodes } from '../../api/feeds';
@@ -25,6 +27,7 @@ function CueTemplatesPanel({ slug }: Props) {
   const queryClient = useQueryClient();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [openModal, setOpenModal] = useState<{ episodeId: string; episodeTitle: string; duration: number } | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const templatesQuery = useQuery({
     queryKey: ['cue-templates', slug],
@@ -112,13 +115,24 @@ function CueTemplatesPanel({ slug }: Props) {
             Mark a short non-spoken cue (chime, stinger) from one episode and the
             matcher will find it on every other episode. Per-feed only.
           </p>
-          <button
-            type="button"
-            className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:opacity-90 text-sm shrink-0"
-            onClick={() => setPickerOpen(true)}
-          >
-            + Mark cue
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded border border-input hover:bg-muted text-sm"
+              onClick={() => setScanOpen(true)}
+              disabled={templates.length === 0}
+              title={templates.length === 0 ? 'Mark at least one cue first' : 'Run all enabled templates against an episode'}
+            >
+              Test on episode
+            </button>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:opacity-90 text-sm"
+              onClick={() => setPickerOpen(true)}
+            >
+              + Mark cue
+            </button>
+          </div>
         </div>
 
         {templatesQuery.isLoading && <LoadingSpinner size="sm" className="my-2" />}
@@ -190,6 +204,13 @@ function CueTemplatesPanel({ slug }: Props) {
           onSaved={() => {
             queryClient.invalidateQueries({ queryKey: ['cue-templates', slug] });
           }}
+        />
+      )}
+
+      {scanOpen && (
+        <CueScanModal
+          slug={slug}
+          onClose={() => setScanOpen(false)}
         />
       )}
     </div>
@@ -350,6 +371,182 @@ function EpisodePicker({ slug, onClose, onPick }: EpisodePickerProps) {
             >
               Next →
             </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface CueScanModalProps {
+  slug: string;
+  onClose: () => void;
+}
+
+// Test-mode panel: pick an episode, optionally override the score threshold,
+// run every enabled template against the episode and show peak score + match
+// times per template. No DB writes; pure diagnostic.
+function CueScanModal({ slug, onClose }: CueScanModalProps) {
+  const [picking, setPicking] = useState(true);
+  const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
+  const [scoreOverride, setScoreOverride] = useState<string>('');
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<CueScanResponse | null>(null);
+
+  const runScan = async (ep: Episode, override?: number) => {
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await scanEpisodeCues(slug, ep.id, override);
+      setResult(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const onPick = async (ep: Episode) => {
+    try {
+      const detail = await getEpisode(slug, ep.id);
+      if (detail.hasOriginalAudio === false) {
+        window.alert('Episode has no retained original audio.');
+        return;
+      }
+      setPicking(false);
+      setSelectedEpisode(ep);
+      await runScan(ep);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Could not load episode');
+    }
+  };
+
+  if (picking) {
+    return (
+      <EpisodePicker
+        slug={slug}
+        onClose={onClose}
+        onPick={onPick}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background text-foreground rounded-lg shadow-xl w-full max-w-3xl p-5 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-base font-semibold">Cue scan</h3>
+            <p className="text-xs text-muted-foreground truncate max-w-xl">
+              {selectedEpisode?.title}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3 mb-4">
+          <div>
+            <label className="block text-xs text-muted-foreground" htmlFor="score-override">
+              Score threshold (optional)
+            </label>
+            <input
+              id="score-override"
+              type="number"
+              min={0}
+              max={0.99}
+              step={0.05}
+              placeholder="default"
+              value={scoreOverride}
+              onChange={(e) => setScoreOverride(e.target.value)}
+              className="w-28 border rounded px-2 py-1 bg-background text-sm font-mono"
+            />
+          </div>
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded border border-input hover:bg-muted text-sm"
+            onClick={() => {
+              if (!selectedEpisode) return;
+              const n = scoreOverride.trim() === '' ? undefined : Number(scoreOverride);
+              if (n !== undefined && (Number.isNaN(n) || n < 0 || n > 0.99)) {
+                setError('threshold must be between 0 and 0.99');
+                return;
+              }
+              runScan(selectedEpisode, n);
+            }}
+            disabled={running}
+          >
+            {running ? 'Scanning…' : 'Rescan'}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded border border-input hover:bg-muted text-sm"
+            onClick={() => {
+              setPicking(true);
+              setResult(null);
+              setSelectedEpisode(null);
+            }}
+          >
+            Pick different episode
+          </button>
+        </div>
+
+        {error && <p className="text-sm text-destructive mb-3">{error}</p>}
+
+        {running && <LoadingSpinner size="sm" className="my-3" />}
+
+        {result && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Threshold {result.thresholdUsed.toFixed(2)} · scan {result.elapsedSeconds.toFixed(1)}s
+            </p>
+            <ul className="divide-y divide-border border rounded">
+              {result.templates.map((t) => {
+                const passed = t.peakScore >= result.thresholdUsed;
+                return (
+                  <li key={t.id} className="p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{t.label}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t.durationS.toFixed(2)}s · template #{t.id}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className={`text-sm font-mono ${passed ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          peak {t.peakScore.toFixed(3)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {t.matchCount} match{t.matchCount === 1 ? '' : 'es'}
+                        </p>
+                      </div>
+                    </div>
+                    {t.matches.length > 0 && (
+                      <ul className="mt-2 text-xs grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-32 overflow-y-auto">
+                        {t.matches.slice(0, 30).map((m, i) => (
+                          <li key={i} className="font-mono">
+                            {formatTime(m.start)} · {m.score.toFixed(3)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </div>

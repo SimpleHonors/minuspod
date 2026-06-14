@@ -79,6 +79,7 @@ function Settings() {
     freqMaxHz: 8000,
     prominenceDb: 9,
     minConfidence: 0.8,
+    createFromPairs: false,
   });
   const [positionalPriorEnabled, setPositionalPriorEnabled] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
@@ -308,6 +309,7 @@ function Settings() {
         freqMaxHz: settings.audioCueFreqMaxHz?.value ?? d.audioCueFreqMaxHz,
         prominenceDb: settings.audioCueProminenceDb?.value ?? d.audioCueProminenceDb,
         minConfidence: settings.audioCueMinConfidence?.value ?? d.audioCueMinConfidence,
+        createFromPairs: settings.audioCueCreateFromPairs?.value ?? d.audioCueCreateFromPairs ?? false,
       });
       setPositionalPriorEnabled(
         settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled);
@@ -358,6 +360,7 @@ function Settings() {
     if (audioCue.freqMaxHz !== (settings.audioCueFreqMaxHz?.value ?? d.audioCueFreqMaxHz)) payload.audioCueFreqMaxHz = audioCue.freqMaxHz;
     if (audioCue.prominenceDb !== (settings.audioCueProminenceDb?.value ?? d.audioCueProminenceDb)) payload.audioCueProminenceDb = audioCue.prominenceDb;
     if (audioCue.minConfidence !== (settings.audioCueMinConfidence?.value ?? d.audioCueMinConfidence)) payload.audioCueMinConfidence = audioCue.minConfidence;
+    if (audioCue.createFromPairs !== (settings.audioCueCreateFromPairs?.value ?? d.audioCueCreateFromPairs ?? false)) payload.audioCueCreateFromPairs = audioCue.createFromPairs;
     if (positionalPriorEnabled !== (settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled)) payload.positionalPriorEnabled = positionalPriorEnabled;
     if (selectedModel !== (settings.claudeModel?.value || '')) payload.claudeModel = selectedModel;
     if (verificationModel !== (settings.verificationModel?.value || '')) payload.verificationModel = verificationModel;

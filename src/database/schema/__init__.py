@@ -1208,6 +1208,35 @@ class SchemaMixin:
             conn.rollback()
             logger.error(f"opus 4.8 token cost correction failed: {e}")
 
+        # Refresh default prompts to mention audio cue evidence (#350 v2).
+        # Marker phrase is unique to the new revision; idempotent.
+        try:
+            from database import (
+                DEFAULT_REVIEW_PROMPT, DEFAULT_RESURRECT_PROMPT,
+            )
+            for key, value in (
+                ('system_prompt', DEFAULT_SYSTEM_PROMPT),
+                ('verification_prompt', DEFAULT_VERIFICATION_PROMPT),
+                ('review_prompt', DEFAULT_REVIEW_PROMPT),
+                ('resurrect_prompt', DEFAULT_RESURRECT_PROMPT),
+            ):
+                row = conn.execute(
+                    "SELECT value, is_default FROM settings WHERE key = ?",
+                    (key,)
+                ).fetchone()
+                marker = 'AUDIO CUE'
+                if row and row['is_default'] and marker not in (row['value'] or ''):
+                    conn.execute(
+                        "UPDATE settings SET value = ? WHERE key = ?",
+                        (value, key),
+                    )
+                    conn.commit()
+                    logger.info(
+                        f"Migration: Updated default {key} with audio cue guidance (#350 v2)"
+                    )
+        except Exception as e:
+            logger.warning(f"Migration failed for audio cue prompt refresh: {e}")
+
         # Per-feed audio cue templates (#350 v2). User-marked ding/stinger
         # samples used by the template-based cue matcher.
         try:

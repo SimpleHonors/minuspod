@@ -293,6 +293,8 @@ def get_settings():
     # Audio cue detection experiment (#350)
     audio_cue_enabled = str(
         _setting_value(settings, 'audio_cue_detection_enabled', 'false')).strip().lower() == 'true'
+    audio_cue_create_from_pairs = str(
+        _setting_value(settings, 'audio_cue_create_from_pairs', 'false')).strip().lower() == 'true'
 
     # Learned positional prior experiment (#360)
     positional_prior_enabled = coerce_bool_setting(
@@ -348,6 +350,7 @@ def get_settings():
         'audioCueFreqMaxHz': _sv('audio_cue_freq_max_hz', audio_cue_freq_max),
         'audioCueProminenceDb': _sv('audio_cue_prominence_db', audio_cue_prominence),
         'audioCueMinConfidence': _sv('audio_cue_min_confidence', audio_cue_min_conf),
+        'audioCueCreateFromPairs': _sv('audio_cue_create_from_pairs', audio_cue_create_from_pairs),
         'positionalPriorEnabled': _sv('positional_prior_enabled', positional_prior_enabled),
         'audioBitrate': _sv('audio_bitrate', audio_bitrate),
         'skipFlacCompression': _sv('skip_flac_compression', skip_flac),
@@ -396,6 +399,7 @@ def get_settings():
             'audioCueFreqMaxHz': int(AUDIO_CUE_FREQ_MAX_HZ),
             'audioCueProminenceDb': AUDIO_CUE_PROMINENCE_DB,
             'audioCueMinConfidence': AUDIO_CUE_MIN_CONFIDENCE,
+            'audioCueCreateFromPairs': False,
             'audioBitrate': DEFAULT_AUDIO_BITRATE,
             'skipFlacCompression': coerce_bool_setting(os.environ.get('SKIP_FLAC_COMPRESSION', 'false')),
             'adDetectionParallelWindows': AD_DETECTION_PARALLEL_WINDOWS_DEFAULT,
@@ -812,6 +816,11 @@ def _apply_audio_cue_fields(db, data):
         raw = data['audioCueDetectionEnabled']
         enabled = raw if isinstance(raw, bool) else str(raw).strip().lower() in ('true', '1', 'yes')
         writes.append(('audio_cue_detection_enabled', 'true' if enabled else 'false'))
+
+    if 'audioCueCreateFromPairs' in data:
+        raw = data['audioCueCreateFromPairs']
+        enabled = raw if isinstance(raw, bool) else str(raw).strip().lower() in ('true', '1', 'yes')
+        writes.append(('audio_cue_create_from_pairs', 'true' if enabled else 'false'))
 
     parsed = {}
     for field_name, db_key, lo, hi in (

@@ -8,6 +8,7 @@ export interface AudioCueState {
   freqMaxHz: number;
   prominenceDb: number;
   minConfidence: number;
+  createFromPairs: boolean;
 }
 
 interface AudioCueDetectionSectionProps {
@@ -137,6 +138,22 @@ function AudioCueDetectionSection({ audioCue, onChange }: AudioCueDetectionSecti
             </div>
           </div>
         )}
+
+        <div className="border-t border-border pt-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <ToggleSwitch
+              checked={audioCue.createFromPairs}
+              onChange={(v) => update('createFromPairs', v)}
+              ariaLabel="Create ads from cue pairs"
+            />
+            <span className="text-sm font-medium text-foreground">
+              Create ads from cue pairs when the LLM misses a break
+            </span>
+          </label>
+          <p className="mt-2 text-sm text-muted-foreground ml-14">
+            When the cue matcher brackets a span with two high-confidence cues (≥ 0.85) at a plausible break duration (30 s – 8 min), and the LLM did not detect an ad inside it, synthesize a cue-only ad covering the span. Off by default; this breaks the "cue is supporting evidence only" contract, so leave it off until you trust the matcher on this feed.
+          </p>
+        </div>
       </div>
     </CollapsibleSection>
   );

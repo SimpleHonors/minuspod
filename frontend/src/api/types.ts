@@ -169,6 +169,7 @@ export interface Settings {
   audioCueFreqMaxHz: SettingValueNumber;
   audioCueProminenceDb: SettingValueNumber;
   audioCueMinConfidence: SettingValueNumber;
+  audioCueCreateFromPairs: SettingValueBoolean;
   positionalPriorEnabled: SettingValueBoolean;
   vttTranscriptsEnabled: SettingValueBoolean;
   chaptersEnabled: SettingValueBoolean;
@@ -222,6 +223,7 @@ export interface Settings {
     audioCueFreqMaxHz: number;
     audioCueProminenceDb: number;
     audioCueMinConfidence: number;
+    audioCueCreateFromPairs: boolean;
     positionalPriorEnabled: boolean;
   };
 }
@@ -249,6 +251,7 @@ export interface UpdateSettingsPayload {
   audioCueFreqMaxHz?: number;
   audioCueProminenceDb?: number;
   audioCueMinConfidence?: number;
+  audioCueCreateFromPairs?: boolean;
   positionalPriorEnabled?: boolean;
   vttTranscriptsEnabled?: boolean;
   chaptersEnabled?: boolean;

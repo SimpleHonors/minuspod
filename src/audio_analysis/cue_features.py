@@ -133,9 +133,14 @@ def compute_mfcc(samples: np.ndarray, sample_rate: int = SAMPLE_RATE_HZ,
     cepstrum = dct(log_mel, type=2, axis=1, norm='ortho')
     mfcc = cepstrum[:, 1:1 + n_coeffs].astype(np.float32)
 
-    # Cepstral mean normalization makes the per-coeff mean zero, which
-    # cancels stationary channel effects (microphone, codec EQ).
-    mfcc -= mfcc.mean(axis=0, keepdims=True)
+    # Note: no cepstral mean normalization here. CMN sounds attractive (it
+    # cancels stationary channel EQ) but applied per-input it normalizes the
+    # template against its own short-window mean and the haystack against
+    # its long-window mean -- two different baselines -- so even the cue's
+    # source episode scores ~0.4 against its own template. The matcher's
+    # cosine similarity is already magnitude-invariant; channel EQ
+    # differences across episodes of the same show are typically small
+    # enough that raw MFCCs still score >= 0.8 on a real recurrence.
     return mfcc
 
 
