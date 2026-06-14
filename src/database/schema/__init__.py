@@ -1208,6 +1208,37 @@ class SchemaMixin:
             conn.rollback()
             logger.error(f"opus 4.8 token cost correction failed: {e}")
 
+        # Per-feed audio cue templates (#350 v2). User-marked ding/stinger
+        # samples used by the template-based cue matcher.
+        try:
+            fresh = not self._table_exists(conn, 'audio_cue_templates')
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audio_cue_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    podcast_id INTEGER NOT NULL,
+                    label TEXT NOT NULL,
+                    source_episode_id TEXT,
+                    source_offset_s REAL NOT NULL,
+                    duration_s REAL NOT NULL,
+                    sample_rate INTEGER NOT NULL,
+                    n_coeffs INTEGER NOT NULL,
+                    mfcc_blob BLOB NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    created_by TEXT DEFAULT 'user',
+                    FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cue_templates_feed "
+                "ON audio_cue_templates(podcast_id, enabled)"
+            )
+            conn.commit()
+            if fresh:
+                logger.info("Migration: Created audio_cue_templates table")
+        except Exception as e:
+            logger.warning(f"audio_cue_templates table creation: {e}")
+
     def _run_correct_opus48_token_cost(self, conn):
         """One-time correction of recorded Opus 4.8 (`claudeopus48`) token cost.
 

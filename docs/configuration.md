@@ -137,7 +137,13 @@ If you customized your system or verification prompt before this release, the up
 
 ### Audio Cue Detection
 
-Some shows play a short non-spoken cue, a chime or stinger, right before an ad break. The transcript cannot capture it, so detection lands a beat late. With this experiment on, an extra ffmpeg pass band-passes the audio to the cue's frequency band and flags brief loudness bursts that stand out from the in-band speech baseline. Each burst is passed to the detector as an `audio_cue` signal, the same way volume changes and DAI transitions already are.
+Some shows play a short non-spoken cue, a chime or stinger, right before an ad break. The transcript cannot capture it, so detection lands a beat late. There are two modes:
+
+**Per-feed templates (recommended).** Open a feed and expand **Audio Cue Templates**, then click **+ Mark cue** to pick a recent episode and drag a 0.2 – 4 s region over the cue on the waveform. The server extracts an MFCC fingerprint of the selection; the matcher slides that fingerprint across every other episode of the same feed using normalized cross-correlation, finding the same sound regardless of band tuning. Use **Save & preview** to confirm the matches on the source episode before the template goes live. When a feed has at least one enabled template the global spectral detector is bypassed for that feed.
+
+Each detected cue then refines the ad's start edge: if the matcher finds a high-confidence cue within a few seconds of an LLM-detected ad's start, the cut is snapped to the cue end, capped by **Max boundary shift** so a misfiring cue cannot warp the boundary beyond what the reviewer permits.
+
+**Global spectral fallback.** When a feed has no templates and this experiment is on, an extra ffmpeg pass band-passes the audio to the cue's frequency band and flags brief loudness bursts that stand out from the in-band speech baseline. Each burst is passed to the detector as an `audio_cue` signal, the same way volume changes and DAI transitions already are.
 
 The cue never marks an ad on its own. The model must still find ad content in the transcript, so the cue only sharpens an ad's start time rather than creating ads.
 

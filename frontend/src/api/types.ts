@@ -44,6 +44,7 @@ export interface Episode {
   duration?: number;
   status: 'discovered' | 'pending' | 'processing' | 'completed' | 'failed' | 'permanently_failed';
   ad_count?: number;
+  hasOriginalAudio?: boolean;
 }
 
 export interface EpisodeDetail extends Episode {

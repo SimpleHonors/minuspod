@@ -14,6 +14,7 @@ from database.sponsors import SponsorMixin
 from database.stats import StatsMixin
 from database.maintenance import MaintenanceMixin
 from database.fingerprints import FingerprintMixin
+from database.cue_templates import CueTemplateMixin
 from database.queue import QueueMixin
 from database.search import SearchMixin
 from database.auth_lockout import AuthLockoutMixin
@@ -243,7 +244,7 @@ Output: []{sponsor_database}"""
 
 class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
                PatternMixin, SponsorMixin, StatsMixin, MaintenanceMixin,
-               FingerprintMixin, QueueMixin, SearchMixin, AuthLockoutMixin):
+               FingerprintMixin, CueTemplateMixin, QueueMixin, SearchMixin, AuthLockoutMixin):
     """SQLite database manager with thread-safe connections."""
 
     _instance = None

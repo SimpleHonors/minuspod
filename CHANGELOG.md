@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Per-feed audio cue templates (#350 v2). The previous cue detector (2.8.4) flagged any short loudness burst in a band; this release lets the user mark the exact sound on the waveform of one episode. The server stores the cue's MFCC fingerprint; the cue matcher slides it across every other episode using normalized cross-correlation, so the cue is found wherever it repeats regardless of the band knobs. Templates take precedence per feed: if any are enabled the spectral detector is bypassed, otherwise it stays as the fallback. Each match is fed to the first-pass detector as an `audio_cue` signal (the LLM still has to find ad content in the transcript), and a new boundary-snap pass shifts the start edge of an LLM-detected ad to the nearest high-confidence cue end (capped by the reviewer's max boundary shift) so the cut lands on the chime rather than a beat into the spoken copy. Templates live under "Audio Cue Templates" on the feed detail page; the mark dialog uses the same wavesurfer waveform the ad editor does, with a 0.2 – 4 s region selector and an optional Save & preview button that shows every match on the source episode before the template goes live.
+
 ## [2.8.10] - 2026-06-13
 
 ### Added

@@ -309,9 +309,14 @@ def _run_audio_analysis(slug, episode_id, audio_path, segments):
     status_service.update_job_stage("pass1:analyzing", 25)
     audio_logger.info(f"[{slug}:{episode_id}] Running audio analysis")
     try:
+        # Resolve the feed PK so the cue analyzer can pick a per-feed
+        # template matcher when the user has marked any.
+        podcast_row = db.get_podcast_by_slug(slug)
+        feed_id = podcast_row.get('id') if podcast_row else None
         result = audio_analyzer.analyze(
             audio_path,
             transcript_segments=segments,
+            feed_id=feed_id,
             status_callback=lambda stage, progress: status_service.update_job_stage(stage, progress)
         )
         if result.signals:
@@ -371,6 +376,23 @@ def _detect_ads_first_pass(ctx, segments, audio_path,
         audio_logger.info(f"[{slug}:{episode_id}] First pass: Detected {len(first_pass_ads)} ads ({total_ad_time/60:.1f} min)")
     else:
         audio_logger.info(f"[{slug}:{episode_id}] First pass: No ads detected")
+
+    # Snap ad starts to nearby audio cues when the analyzer flagged any.
+    # Capped by the reviewer's max_boundary_shift setting so a misfiring cue
+    # cannot warp the boundary beyond what the user has authorised.
+    if first_pass_ads and audio_analysis_result:
+        try:
+            from ad_detector.cue_boundary_snap import snap_ad_starts_to_cues
+            raw_cap = db.get_setting('review_max_boundary_shift')
+            try:
+                max_shift = float(raw_cap) if raw_cap is not None else 60.0
+            except (TypeError, ValueError):
+                max_shift = 60.0
+            snap_ad_starts_to_cues(first_pass_ads, audio_analysis_result, max_shift)
+        except Exception as e:
+            audio_logger.warning(
+                f"[{slug}:{episode_id}] Cue boundary snap skipped: {e}"
+            )
 
     return first_pass_ads, len(first_pass_ads), ad_result
 

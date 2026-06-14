@@ -65,6 +65,9 @@ def list_episodes(slug):
 
     # Get query params
     status = request.args.get('status', 'all')
+    # API-facing alias: frontend uses 'completed' but the DB stores 'processed'.
+    if status == EpisodeStatus.COMPLETED.value:
+        status = EpisodeStatus.PROCESSED.value
     limit = min(int(request.args.get('limit', 25)), 500)
     offset = int(request.args.get('offset', 0))
     sort_by = request.args.get('sort_by', 'published_at')
@@ -94,6 +97,9 @@ def list_episodes(slug):
             'published': ep.get('published_at') or ep['created_at'],
             'duration': ep['original_duration'],
             'ad_count': ep['ads_removed'],
+            # True when this episode's original audio is still on disk
+            # (required to mark cue templates or replay original audio).
+            'hasOriginalAudio': bool(ep.get('original_file')),
             # Additional fields for backward compatibility
             'episodeId': ep['episode_id'],
             'createdAt': ep['created_at'],
