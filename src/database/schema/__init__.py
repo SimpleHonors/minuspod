@@ -1209,22 +1209,25 @@ class SchemaMixin:
             logger.error(f"opus 4.8 token cost correction failed: {e}")
 
         # Refresh default prompts to mention audio cue evidence (#350 v2).
-        # Marker phrase is unique to the new revision; idempotent.
+        # Marker phrase per prompt is unique to the latest revision; idempotent.
+        # 'Multiple cues can fire' was added in the v2.1 refinement (commit
+        # 4e141ded) to warn the LLM that clustered cues can sit inside one
+        # break. The resurrect prompt was not re-touched in v2.1 so it keeps
+        # the v2 'AUDIO CUE' marker.
         try:
             from database import (
                 DEFAULT_REVIEW_PROMPT, DEFAULT_RESURRECT_PROMPT,
             )
-            for key, value in (
-                ('system_prompt', DEFAULT_SYSTEM_PROMPT),
-                ('verification_prompt', DEFAULT_VERIFICATION_PROMPT),
-                ('review_prompt', DEFAULT_REVIEW_PROMPT),
-                ('resurrect_prompt', DEFAULT_RESURRECT_PROMPT),
+            for key, value, marker in (
+                ('system_prompt', DEFAULT_SYSTEM_PROMPT, 'Multiple cues can fire'),
+                ('verification_prompt', DEFAULT_VERIFICATION_PROMPT, 'Multiple cues can fire'),
+                ('review_prompt', DEFAULT_REVIEW_PROMPT, 'Multiple cues can fire'),
+                ('resurrect_prompt', DEFAULT_RESURRECT_PROMPT, 'AUDIO CUE'),
             ):
                 row = conn.execute(
                     "SELECT value, is_default FROM settings WHERE key = ?",
                     (key,)
                 ).fetchone()
-                marker = 'AUDIO CUE'
                 if row and row['is_default'] and marker not in (row['value'] or ''):
                     conn.execute(
                         "UPDATE settings SET value = ? WHERE key = ?",
