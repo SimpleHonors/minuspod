@@ -843,9 +843,16 @@ the break it sits on:
     span at the cue, not at the first spoken word.
   - A cue immediately after the last promotional phrase is the ad's END. End the ad span at the
     cue, not after the host has resumed.
-  - Two cues bracketing a span are evidence that the span between them is the break, even if the
-    transcript inside looks light on promotional language (e.g. a baked-in sponsor read where the
-    sponsor name only appears once).
+  - Multiple cues can fire INSIDE a single break: an intro stinger, a mid-break bumper between
+    two stacked sponsor reads, and an outro stinger are all common. Two cues in short proximity
+    (less than ~30 seconds apart, or with no resumption of host/editorial content between them)
+    usually sit inside the same break, not bracket a complete one. Do NOT end the ad at an
+    intermediate cue while the transcript is still promotional or silent -- extend the span to
+    the LAST cue before genuine show content resumes.
+  - Two cues bracket a complete break only when the span between them contains promotional copy
+    and the cue after the second cue resumes show content. If the transcript after the second
+    cue is still promotional, the break is still in progress and another cue is likely the true
+    end marker.
 The cue itself is never an ad on its own; it is the strongest available signal of where the
 break actually begins and ends.
 
