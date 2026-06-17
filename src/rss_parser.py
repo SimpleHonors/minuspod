@@ -45,6 +45,15 @@ def _max_rss_bytes() -> int:
     return max(1 * 1024 * 1024, raw)
 
 
+def _feed_trust() -> URLTrust:
+    """Strict SSRF tier for feed URLs by default (rss-http-1); opt back into
+    private/LAN hosts with MINUSPOD_ALLOW_PRIVATE_FEED_HOSTS=true."""
+    opt_in = os.environ.get('MINUSPOD_ALLOW_PRIVATE_FEED_HOSTS', '').strip().lower()
+    if opt_in in ('1', 'true', 'yes', 'on'):
+        return URLTrust.OPERATOR_CONFIGURED
+    return URLTrust.FEED_CONTENT
+
+
 def _content_type_looks_like_feed(header_value: str | None) -> bool:
     """Accept anything that plausibly carries RSS / Atom bytes.
 
@@ -225,7 +234,7 @@ class RSSParser:
             # add_feed slug derivation fail on UA-strict hosts.
             response = safe_get(
                 url,
-                trust=URLTrust.OPERATOR_CONFIGURED,
+                trust=_feed_trust(),
                 timeout=timeout,
                 max_redirects=HTTP_MAX_REDIRECTS_FEED,
                 stream=True,
@@ -262,18 +271,29 @@ class RSSParser:
             try:
                 response = safe_get(
                     url,
-                    trust=URLTrust.OPERATOR_CONFIGURED,
+                    trust=_feed_trust(),
                     timeout=timeout,
                     max_redirects=HTTP_MAX_REDIRECTS_FEED,
+                    stream=True,
                     headers={
                         'Accept-Encoding': 'identity',
                         'User-Agent': APP_USER_AGENT,
                     },
                 )
                 response.raise_for_status()
-                logger.info(f"Successfully fetched RSS feed (uncompressed), size: {len(response.content)} bytes")
+                max_bytes = _max_rss_bytes()
+                try:
+                    body = read_response_capped(response, max_bytes)
+                except ResponseTooLargeError:
+                    logger.warning("feed_size_cap_exceeded: url=%s max=%d",
+                                   safe_url_for_log(url), max_bytes)
+                    _get_rss_circuit_breaker(url).record_failure()
+                    return None
+                finally:
+                    response.close()
+                logger.info(f"Successfully fetched RSS feed (uncompressed), size: {len(body)} bytes")
                 _get_rss_circuit_breaker(url).record_success()
-                return response.text
+                return body.decode('utf-8', errors='replace')
             except (requests.RequestException, SSRFError) as retry_e:
                 logger.error(f"Failed to fetch RSS feed (retry): {retry_e}")
                 _get_rss_circuit_breaker(url).record_failure()
@@ -316,25 +336,46 @@ class RSSParser:
         try:
             response = safe_get(
                 url,
-                trust=URLTrust.OPERATOR_CONFIGURED,
+                trust=_feed_trust(),
                 timeout=timeout,
                 max_redirects=HTTP_MAX_REDIRECTS_FEED,
+                stream=True,
                 headers=headers,
             )
 
             if response.status_code == 304:
-                logger.info(f"Feed not modified (304): {safe_url_for_log(url)}")
+                logger.debug(f"Feed not modified (304): {safe_url_for_log(url)}")
                 _get_rss_circuit_breaker(url).record_success()
+                response.close()
                 return None, etag, last_modified
 
             response.raise_for_status()
+            if not _content_type_looks_like_feed(response.headers.get('Content-Type')):
+                logger.warning(
+                    "RSS conditional fetch rejected on content-type: url=%s content_type=%r",
+                    url, response.headers.get('Content-Type'),
+                )
+                response.close()
+                _get_rss_circuit_breaker(url).record_failure()
+                return None, None, None
 
             new_etag = response.headers.get('ETag')
             new_last_modified = response.headers.get('Last-Modified')
 
-            logger.info(f"Fetched RSS feed, size: {len(response.content)} bytes")
+            max_bytes = _max_rss_bytes()
+            try:
+                body = read_response_capped(response, max_bytes)
+            except ResponseTooLargeError:
+                logger.warning("feed_size_cap_exceeded: url=%s max=%d",
+                               safe_url_for_log(url), max_bytes)
+                _get_rss_circuit_breaker(url).record_failure()
+                return None, None, None
+            finally:
+                response.close()
+
+            logger.debug(f"Fetched RSS feed, size: {len(body)} bytes")
             _get_rss_circuit_breaker(url).record_success()
-            return response.text, new_etag, new_last_modified
+            return body.decode('utf-8', errors='replace'), new_etag, new_last_modified
 
         except SSRFError as e:
             logger.warning(f"SSRF blocked in fetch_feed_conditional: {e} (url={safe_url_for_log(url)})")
@@ -347,20 +388,34 @@ class RSSParser:
                 headers['Accept-Encoding'] = 'identity'
                 response = safe_get(
                     url,
-                    trust=URLTrust.OPERATOR_CONFIGURED,
+                    trust=_feed_trust(),
                     timeout=timeout,
                     max_redirects=HTTP_MAX_REDIRECTS_FEED,
+                    stream=True,
                     headers=headers,
                 )
                 if response.status_code == 304:
                     _get_rss_circuit_breaker(url).record_success()
+                    response.close()
                     return None, etag, last_modified
                 response.raise_for_status()
+                new_etag = response.headers.get('ETag')
+                new_last_modified = response.headers.get('Last-Modified')
+                max_bytes = _max_rss_bytes()
+                try:
+                    body = read_response_capped(response, max_bytes)
+                except ResponseTooLargeError:
+                    logger.warning("feed_size_cap_exceeded: url=%s max=%d",
+                                   safe_url_for_log(url), max_bytes)
+                    _get_rss_circuit_breaker(url).record_failure()
+                    return None, None, None
+                finally:
+                    response.close()
                 _get_rss_circuit_breaker(url).record_success()
                 return (
-                    response.text,
-                    response.headers.get('ETag'),
-                    response.headers.get('Last-Modified')
+                    body.decode('utf-8', errors='replace'),
+                    new_etag,
+                    new_last_modified,
                 )
             except (SSRFError, requests.RequestException):
                 _get_rss_circuit_breaker(url).record_failure()
@@ -411,7 +466,7 @@ class RSSParser:
             if feed.bozo:
                 logger.warning(f"RSS parse warning: {feed.bozo_exception}")
 
-            logger.info(f"Parsed RSS feed: {feed.feed.get('title', 'Unknown')} with {len(feed.entries)} entries")
+            logger.debug(f"Parsed RSS feed: {feed.feed.get('title', 'Unknown')} with {len(feed.entries)} entries")
             return feed
         except Exception as e:
             logger.error(f"Failed to parse RSS feed: {e}")
@@ -576,12 +631,17 @@ class RSSParser:
                     max_episodes: int = 300,
                     extra_episodes: Optional[List[Dict]] = None,
                     processed_only: bool = False,
-                    processed_episode_ids: Optional[set] = None) -> str:
+                    processed_episode_ids: Optional[set] = None,
+                    parsed_feed=None,
+                    title_override: Optional[str] = None) -> str:
         """Modify RSS feed to use our server URLs.
 
         Args:
             feed_content: Original RSS feed XML
             slug: Podcast slug
+            title_override: When non-empty, replaces the channel title shown to
+                subscribers (issue #375) so a processed feed can be told apart
+                from the source. Episode titles are unaffected.
             storage: Optional Storage instance for checking Podcasting 2.0 assets
             max_episodes: Max episodes to include in feed (1-500, default 300)
             extra_episodes: Processed episodes from DB to append beyond the cap.
@@ -593,8 +653,12 @@ class RSSParser:
             processed_episode_ids: Allow-list of episode_ids the caller has
                 determined to be status='processed'. Required when
                 processed_only=True; ignored otherwise.
+            parsed_feed: Optional pre-parsed feedparser object. When supplied,
+                skips the internal parse_feed call - the caller will have
+                already paid that cost. Passing a None here re-parses
+                feed_content for backwards compatibility.
         """
-        feed = self.parse_feed(feed_content)
+        feed = parsed_feed if parsed_feed is not None else self.parse_feed(feed_content)
         if not feed:
             return feed_content
 
@@ -608,9 +672,12 @@ class RSSParser:
 
         # Copy channel metadata (escape XML entities to prevent invalid XML from & in URLs)
         channel = feed.feed
-        lines.append(f'<title>{self._escape_xml(channel.get("title", ""))}</title>')
+        # Per-feed title override (#375): the rename must actually change the
+        # channel title subscribers see, not just the DB/UI.
+        effective_title = title_override if (title_override or '').strip() else channel.get("title", "")
+        lines.append(f'<title>{self._escape_xml(effective_title)}</title>')
         lines.append(f'<link>{self._escape_xml(channel.get("link", ""))}</link>')
-        lines.append(f'<description><![CDATA[{self._get_channel_description(channel)}]]></description>')
+        lines.append(f'<description><![CDATA[{self._escape_cdata(self._get_channel_description(channel))}]]></description>')
         lines.append(f'<language>{self._escape_xml(channel.get("language", "en"))}</language>')
 
         # Pass through standard RSS + iTunes channel metadata from upstream
@@ -625,7 +692,7 @@ class RSSParser:
         # <itunes:image> tag that Apple Podcasts and most apps prefer.
         artwork_url = self.extract_podcast_artwork_url(feed_content)
         if artwork_url:
-            channel_title = channel.get('title', '') or ''
+            channel_title = effective_title or ''
             channel_link = channel.get('link', '') or ''
             lines.append(f'<image>')
             lines.append(f'  <url>{self._escape_xml(artwork_url)}</url>')
@@ -644,7 +711,7 @@ class RSSParser:
         entries = feed.entries[:max_episodes]
 
         if len(feed.entries) > max_episodes:
-            logger.info(f"[{slug}] Limiting feed from {len(feed.entries)} to {max_episodes} episodes")
+            logger.debug(f"[{slug}] Limiting feed from {len(feed.entries)} to {max_episodes} episodes")
 
         # Process each episode from RSS
         included_episode_ids = set()
@@ -669,7 +736,7 @@ class RSSParser:
 
             lines.append('<item>')
             lines.append(f'  <title>{self._escape_xml(entry.get("title", ""))}</title>')
-            lines.append(f'  <description><![CDATA[{self._get_episode_description(entry)}]]></description>')
+            lines.append(f'  <description><![CDATA[{self._escape_cdata(self._get_episode_description(entry))}]]></description>')
             lines.append(f'  <link>{self._escape_xml(entry.get("link", ""))}</link>')
             lines.append(f'  <guid>{self._escape_xml(entry.get("id", episode_url))}</guid>')
             lines.append(f'  <pubDate>{self._escape_xml(entry.get("published", ""))}</pubDate>')
@@ -749,7 +816,7 @@ class RSSParser:
         lines.append('<item>')
         lines.append(f'  <title>{self._escape_xml(ep.get("title") or "Unknown")}</title>')
         if ep.get('description'):
-            lines.append(f'  <description><![CDATA[{ep["description"]}]]></description>')
+            lines.append(f'  <description><![CDATA[{self._escape_cdata(ep["description"])}]]></description>')
         lines.append(f'  <enclosure url="{modified_url}" type="audio/mpeg" />')
         lines.append(f'  <guid isPermaLink="false">{ep_id}</guid>')
         if ep.get('published_at'):
@@ -940,6 +1007,21 @@ class RSSParser:
             .replace('>', '&gt;')
             .replace('"', '&quot;')
             .replace("'", '&apos;'))
+
+    @staticmethod
+    def _escape_cdata(text) -> str:
+        """Make ``text`` safe to embed inside a ``<![CDATA[...]]>`` block.
+
+        CDATA has no character escaping; the only sequence that can break out
+        is the terminator ``]]>``. Upstream descriptions are attacker-influenced
+        (whatever the source feed publishes), so an unescaped ``]]>`` corrupts
+        the generated XML and breaks the served feed for every subscriber. The
+        canonical fix splits the terminator across two CDATA sections so the
+        literal text is preserved while the parser never sees a real ``]]>``.
+        """
+        if not text:
+            return ""
+        return str(text).replace(']]>', ']]]]><![CDATA[>')
 
     def _serialize_podcast_element(self, elem, _depth: int = 0) -> str:
         # Hand-rolled rather than ``ET.tostring`` because tostring re-declares
@@ -1228,9 +1310,16 @@ class RSSParser:
 
         return deduplicated
 
-    def extract_episodes(self, feed_content: str) -> List[Dict]:
-        """Extract episode information from feed."""
-        feed = self.parse_feed(feed_content)
+    def extract_episodes(self, feed_content: str, parsed_feed=None) -> List[Dict]:
+        """Extract episode information from feed.
+
+        Args:
+            feed_content: Original RSS feed XML.
+            parsed_feed: Optional pre-parsed feedparser object. When supplied,
+                skips the internal parse_feed call so a single refresh cycle
+                does not pay the parse cost three times.
+        """
+        feed = parsed_feed if parsed_feed is not None else self.parse_feed(feed_content)
         if not feed:
             return []
 

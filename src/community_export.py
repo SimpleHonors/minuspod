@@ -35,8 +35,10 @@ from utils.community_tags import (
     BUNDLE_VERSION,
     CONSUMER_EMAIL_DOMAINS,
     EMAIL_REGEX,
+    expected_filename,
     GITHUB_REPO,
     PHONE_REGEX,
+    app_version,
     is_tollfree,
     valid_tags,
 )
@@ -61,11 +63,6 @@ class ExportError(Exception):
         super().__init__('; '.join(reasons))
         self.reasons = reasons
 
-
-def _slugify(name: str) -> str:
-    """Lowercase, hyphenated, ASCII-safe slug."""
-    s = re.sub(r'[^a-z0-9]+', '-', name.lower())
-    return s.strip('-') or 'sponsor'
 
 
 def _strip_emails(text: str) -> str:
@@ -98,7 +95,7 @@ def strip_pii(text: str) -> str:
     return _strip_phones(_strip_emails(text))
 
 
-def _normalize_aliases(value) -> List[str]:
+def normalize_aliases(value) -> List[str]:
     """Accept aliases as either a list (CSV-derived seed) or a JSON string
     (DB rows). Return a plain list of non-empty strings."""
     if isinstance(value, list):
@@ -111,6 +108,52 @@ def _normalize_aliases(value) -> List[str]:
         if isinstance(parsed, list):
             return [str(a) for a in parsed if a]
     return []
+
+
+def count_brand_occurrences(text: str, sponsor_row: Optional[Dict]) -> int:
+    """Maximum case-insensitive substring count of the sponsor's name and any
+    of its aliases against `text`. Also counts whitespace-stripped variants
+    so a sponsor stored as 'statefarm' still scores against a 'State Farm'
+    mention, and vice versa.
+
+    Returns 0 when sponsor_row is missing, has no name/aliases, or no
+    variant appears in text. The 2.5.13 pattern-correctness guard rejects
+    patterns where the returned count is <2.
+    """
+    if not sponsor_row or not text:
+        return 0
+    name = (sponsor_row.get('name') or '').strip()
+    if not name:
+        return 0
+    candidates = {name.lower()}
+    no_ws = name.replace(' ', '').lower()
+    if no_ws:
+        candidates.add(no_ws)
+    for alias in normalize_aliases(sponsor_row.get('aliases')):
+        if not alias:
+            continue
+        candidates.add(alias.lower())
+        alias_no_ws = alias.replace(' ', '').lower()
+        if alias_no_ws:
+            candidates.add(alias_no_ws)
+    text_lower = text.lower()
+    return max((text_lower.count(c) for c in candidates), default=0)
+
+
+def declared_sponsor_names_lower(sponsor_row: Optional[Dict]) -> set:
+    """Return the lowercased name + aliases set for a known_sponsors row.
+
+    Empty set when the row is missing or has no name; callers can pass this
+    straight to find_foreign_sponsors as `declared_names_lower`.
+    """
+    if not sponsor_row:
+        return set()
+    name = (sponsor_row.get('name') or '').lower()
+    declared = {name} if name else set()
+    for alias in normalize_aliases(sponsor_row.get('aliases')):
+        if alias:
+            declared.add(alias.lower())
+    return declared
 
 
 def find_foreign_sponsors(
@@ -141,7 +184,7 @@ def find_foreign_sponsors(
         name_l = name.lower()
         if not name_l:
             continue
-        candidates = [name_l] + [a.lower() for a in _normalize_aliases(s.get('aliases'))]
+        candidates = [name_l] + [a.lower() for a in normalize_aliases(s.get('aliases'))]
         if any(c in declared_names_lower for c in candidates):
             continue
         for c in candidates:
@@ -151,7 +194,7 @@ def find_foreign_sponsors(
     return foreign
 
 
-def _quality_gates(pattern: Dict, sponsors: List[Dict]) -> List[str]:
+def _quality_gates(pattern: Dict, sponsors: List[Dict], override: Optional[Dict] = None) -> List[str]:
     """Run quality gates. Returns a list of failure reasons (empty = pass)."""
     reasons: List[str] = []
     text = pattern.get('text_template') or ''
@@ -183,8 +226,23 @@ def _quality_gates(pattern: Dict, sponsors: List[Dict]) -> List[str]:
         reasons.append('sponsor not found')
         return reasons
 
-    declared_aliases = _normalize_aliases(sponsor_row.get('aliases'))
-    sponsor_names = [sponsor_row['name']] + declared_aliases
+    # Per-export override: contributor refined the sponsor in the Export
+    # dialog. Re-run the sponsor-in-text check against the overridden
+    # values so an edit that strips the brand name out of the text fails
+    # the gate the same way the original would.
+    if override:
+        override_name = (override.get('sponsor') or '').strip() or None
+        override_aliases = override.get('sponsor_aliases')
+    else:
+        override_name = None
+        override_aliases = None
+
+    sponsor_name = override_name if override_name else sponsor_row['name']
+    if override_aliases is not None:
+        declared_aliases = list(override_aliases)
+    else:
+        declared_aliases = normalize_aliases(sponsor_row.get('aliases'))
+    sponsor_names = [sponsor_name] + declared_aliases
 
     text_lower = text.lower()
     name_present = any(
@@ -202,14 +260,22 @@ def _quality_gates(pattern: Dict, sponsors: List[Dict]) -> List[str]:
     return reasons
 
 
-def _validate_tags(pattern: Dict, sponsor_row: Dict) -> List[str]:
+def _validate_tags(pattern: Dict, sponsor_row: Dict, override: Optional[Dict] = None) -> List[str]:
     """Reject any tag not in VALID_TAGS."""
     bad: List[str] = []
     vt = valid_tags()
-    try:
-        tags = json.loads(sponsor_row.get('tags') or '[]')
-    except (TypeError, ValueError):
-        tags = []
+    if override and override.get('sponsor_tags') is not None:
+        # Refuse to coerce a non-list (`list("universal")` would explode
+        # into single chars and produce a wall of nonsense "unknown tag"
+        # rejections). The route layer already filters allowed fields;
+        # this is defense in depth against a malformed body.
+        raw_tags = override['sponsor_tags']
+        tags = list(raw_tags) if isinstance(raw_tags, list) else []
+    else:
+        try:
+            tags = json.loads(sponsor_row.get('tags') or '[]')
+        except (TypeError, ValueError):
+            tags = []
     for t in tags or []:
         if t not in vt:
             bad.append(t)
@@ -303,26 +369,38 @@ def _strip_metadata(pattern: Dict, sponsor_row: Dict) -> Dict:
     }
 
 
-def _app_version() -> str:
-    try:
-        from version import __version__
-        return __version__
-    except Exception:
-        return 'unknown'
-
-
-def build_export_payload(pattern: Dict, sponsors: List[Dict]) -> Dict:
+def build_export_payload(
+    pattern: Dict,
+    sponsors: List[Dict],
+    override: Optional[Dict] = None,
+) -> Dict:
     """Run the full pipeline and return the JSON payload + sponsor classification."""
     sponsor_id = pattern.get('sponsor_id')
     sponsor_row = next((s for s in sponsors if s['id'] == sponsor_id), None)
 
-    failures = _quality_gates(pattern, sponsors)
+    failures = _quality_gates(pattern, sponsors, override=override)
     if sponsor_row:
-        failures.extend(_validate_tags(pattern, sponsor_row))
+        failures.extend(_validate_tags(pattern, sponsor_row, override=override))
     if failures:
         raise ExportError(failures)
 
     payload = _strip_metadata(pattern, sponsor_row)
+
+    if override:
+        # `or '').strip()` matches the _quality_gates resolution: an
+        # empty or whitespace-only sponsor override is treated as "no
+        # override" so the payload mirrors the gate's view of the
+        # sponsor name. Aliases / tags only apply when the override is
+        # a list (strings would silently coerce to chars).
+        sponsor_override = (override.get('sponsor') or '').strip()
+        if sponsor_override:
+            payload['sponsor'] = sponsor_override
+        raw_aliases = override.get('sponsor_aliases')
+        if isinstance(raw_aliases, list):
+            payload['sponsor_aliases'] = list(raw_aliases)
+        raw_tags = override.get('sponsor_tags')
+        if isinstance(raw_tags, list):
+            payload['sponsor_tags'] = list(raw_tags)
 
     sponsor_match = _classify_sponsor(payload['sponsor'], sponsors)
 
@@ -330,7 +408,7 @@ def build_export_payload(pattern: Dict, sponsors: List[Dict]) -> Dict:
         'community_id': str(uuid.uuid4()),
         'version': 1,
         'submitted_at': datetime.now(timezone.utc).isoformat(),
-        'submitted_app_version': _app_version(),
+        'submitted_app_version': app_version(),
         'sponsor_match': sponsor_match,
     })
     return payload
@@ -343,9 +421,8 @@ def build_pr_url(payload: Dict) -> Tuple[str, str, bool]:
     still returned but it should NOT be opened -- the caller should offer the
     JSON file as a download instead.
     """
-    sponsor_slug = _slugify(payload.get('sponsor') or 'sponsor')
-    short_uuid = payload['community_id'].split('-')[0]
-    filename = f'{sponsor_slug}-{short_uuid}.json'
+    filename = expected_filename(payload.get('sponsor') or 'sponsor',
+                                payload['community_id'])
     body = json.dumps(payload, indent=2, ensure_ascii=False)
     encoded = urllib.parse.quote(body, safe='')
     url = PR_URL_TEMPLATE.format(
@@ -365,8 +442,15 @@ def _sponsor_name_for(pattern: Dict, sponsors: List[Dict]) -> Optional[str]:
     return row.get('name') if row else None
 
 
-def build_bundle(pattern_ids: List[int], db) -> Tuple[Dict, List[Dict]]:
+def build_bundle(
+    pattern_ids: List[int],
+    db,
+    overrides: Optional[Dict[int, Dict]] = None,
+) -> Tuple[Dict, List[Dict]]:
     """Run the export pipeline on each id and produce one bundle JSON.
+
+    `overrides` maps pattern id -> partial field dict forwarded to
+    build_export_payload for that pattern (e.g. corrected sponsor name).
 
     Returns (bundle_payload, rejected). `rejected` is a list of
     `{id, sponsor, reasons:[str]}` for patterns that failed pre-flight.
@@ -390,7 +474,8 @@ def build_bundle(pattern_ids: List[int], db) -> Tuple[Dict, List[Dict]]:
             })
             continue
         try:
-            payload = build_export_payload(pattern, sponsors)
+            override = (overrides or {}).get(pid)
+            payload = build_export_payload(pattern, sponsors, override=override)
         except ExportError as e:
             rejected.append({
                 'id': pid,
@@ -403,7 +488,7 @@ def build_bundle(pattern_ids: List[int], db) -> Tuple[Dict, List[Dict]]:
         'format': BUNDLE_FORMAT,
         'bundle_version': BUNDLE_VERSION,
         'submitted_at': datetime.now(timezone.utc).isoformat(),
-        'submitted_app_version': _app_version(),
+        'submitted_app_version': app_version(),
         'pattern_count': len(ready),
         'patterns': ready,
     }

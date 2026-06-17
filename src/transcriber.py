@@ -15,7 +15,7 @@ from utils.time import format_vtt_timestamp
 from utils.gpu import clear_gpu_memory, get_available_memory_gb, get_gpu_memory_info
 from utils.url import SSRFError
 from utils.http import safe_url_for_log
-from utils.safe_http import URLTrust, safe_get, safe_post
+from utils.safe_http import URLTrust, safe_get, safe_post, stream_to_file_capped, ResponseTooLargeError
 from utils.subprocess_registry import tracked_run
 from config import (
     API_CHUNK_DURATION_SECONDS,
@@ -38,6 +38,7 @@ from config import (
     HTTP_MAX_REDIRECTS_API,
     HTTP_MAX_REDIRECTS_FEED,
     HTTP_TIMEOUT_WHISPER,
+    coerce_bool_setting,
 )
 
 # Suppress ONNX Runtime warnings before importing faster_whisper
@@ -75,7 +76,8 @@ AD_VOCABULARY = (
     "ExpressVPN, HelloFresh, Audible, Masterclass, ZipRecruiter, "
     "Raycon, Manscaped, Stamps.com, Indeed, LinkedIn, "
     "SimpliSafe, Casper, Helix Sleep, Brooklinen, Bombas, "
-    "Calm, Headspace, Mint Mobile, Dollar Shave Club"
+    "Calm, Headspace, Mint Mobile, Dollar Shave Club, "
+    "Wegovy, Ozempic, Mounjaro"
 )
 
 # Hallucination patterns to filter out (Whisper artifacts)
@@ -180,7 +182,7 @@ def extract_audio_chunk(audio_path: str, start_time: float, end_time: float) -> 
             output_path
         ]
 
-        result = subprocess.run(
+        result = tracked_run(
             cmd,
             capture_output=True,
             timeout=FFMPEG_CHUNK_TIMEOUT
@@ -292,6 +294,7 @@ def _get_whisper_settings() -> Dict[str, str]:
         'api_key': os.environ.get('WHISPER_API_KEY', ''),
         'api_model': os.environ.get('WHISPER_API_MODEL', 'whisper-1'),
         'language': os.environ.get('WHISPER_LANGUAGE') or 'en',
+        'skip_flac_compression': coerce_bool_setting(os.environ.get('SKIP_FLAC_COMPRESSION', 'false')),
     }
     try:
         # Inline import: Database depends on modules that import transcriber,
@@ -311,6 +314,10 @@ def _get_whisper_settings() -> Dict[str, str]:
                 val = db.get_setting(setting_key)
             if val:
                 defaults[default_key] = val
+
+        skip_flac_raw = db.get_setting('skip_flac_compression')
+        if skip_flac_raw is not None:
+            defaults['skip_flac_compression'] = coerce_bool_setting(skip_flac_raw)
     except Exception as e:
         logger.warning(f"Could not read whisper settings from DB, using env defaults: {e}")
 
@@ -630,6 +637,40 @@ class WhisperModelSingleton:
         """Get the name of the currently loaded model."""
         return cls._current_model_name
 
+
+def _whisper_api_rejects_word_timestamps(response) -> bool:
+    """True when the server failed because word-level timestamps are unsupported.
+
+    OpenAI proper returns the rejection as HTTP 400; OpenVINO Model Server
+    surfaces the same condition as a 5xx with a MediaPipe error string. Detect
+    by body-text marker so both shapes route into the segment-only fallback.
+    """
+    if response is None or response.status_code == 200:
+        return False
+    try:
+        body = (response.text or '').lower()
+    except Exception:
+        return False
+    return (
+        'word timestamp' in body
+        or 'timestamps not supported' in body
+        or 'timestamp_granularities' in body
+    )
+
+
+def _effective_language(language_override: Optional[str], whisper_settings: Dict[str, str]) -> str:
+    """Resolve the effective Whisper language as a lowercased code.
+
+    A non-empty per-call override beats the global whisper_language setting;
+    blank falls through to the setting; default 'en'. 'auto' is preserved so
+    callers can branch on it.
+    """
+    override = (language_override or '').strip().lower()
+    if override:
+        return override
+    return (whisper_settings.get('language') or 'en').strip().lower()
+
+
 class Transcriber:
     def __init__(self):
         # Model is now managed by singleton
@@ -640,6 +681,7 @@ class Transcriber:
         audio_path: str,
         podcast_name: str = None,
         whisper_settings: Dict[str, str] = None,
+        language_override: Optional[str] = None,
     ) -> Optional[List[Dict]]:
         """Transcribe audio using an OpenAI-compatible whisper API.
 
@@ -673,7 +715,10 @@ class Transcriber:
 
             # After preprocessing, compress to FLAC for upload (lossless, ~4-5x smaller than WAV).
             # Prevents 413 errors from APIs with tight upload limits (e.g. OpenRouter).
-            if transcribe_path.endswith('.wav'):
+            # Self-hosted Whisper servers that accept WAV directly can opt out via the
+            # skip_flac_compression setting and avoid the extra encode pass.
+            skip_flac = bool(whisper_settings.get('skip_flac_compression', False))
+            if not skip_flac and transcribe_path.endswith('.wav'):
                 fd, flac_path = tempfile.mkstemp(suffix='.flac')
                 os.close(fd)
                 try:
@@ -716,16 +761,15 @@ class Transcriber:
             if api_key:
                 headers['Authorization'] = f'Bearer {api_key}'
 
-            form_data = {
+            form_data_base = {
                 'model': model,
                 'response_format': 'verbose_json',
-                'timestamp_granularities[]': ['segment', 'word'],
             }
-            language = (whisper_settings.get('language') or 'en').strip().lower()
+            language = _effective_language(language_override, whisper_settings)
             if language and language != 'auto':
-                form_data['language'] = language
+                form_data_base['language'] = language
             if initial_prompt:
-                form_data['prompt'] = initial_prompt
+                form_data_base['prompt'] = initial_prompt
 
             # Defensive: refuse to upload tiny or missing files. Avoids
             # remote "empty audio" / decode failures when preprocessing
@@ -748,38 +792,64 @@ class Transcriber:
             # servers; cloud metadata and downgrades refused per-hop).
             # safe_post does not retry; wrap in a small backoff loop so
             # transient upstream blips do not fail a full transcription.
+            # Some OpenAI-compatible servers (OpenVINO Model Server, older
+            # faster-whisper-server builds) reject ['segment','word'] outright;
+            # outer loop retries once with segment-only granularity if the
+            # response body signals that rejection.
             response = None
             max_attempts = 2
-            for attempt in range(max_attempts):
-                try:
-                    with open(transcribe_path, 'rb') as audio_file:
-                        response = safe_post(
-                            url,
-                            trust=URLTrust.OPERATOR_CONFIGURED,
-                            timeout=HTTP_TIMEOUT_WHISPER,
-                            max_redirects=HTTP_MAX_REDIRECTS_API,
-                            files={'file': (os.path.basename(transcribe_path), audio_file)},
-                            data=form_data,
-                            headers=headers,
+            granularity_modes = (
+                ['segment', 'word'],
+                ['segment'],
+            )
+            for gran_idx, granularities in enumerate(granularity_modes):
+                form_data = {
+                    **form_data_base,
+                    'timestamp_granularities[]': granularities,
+                }
+                for attempt in range(max_attempts):
+                    try:
+                        with open(transcribe_path, 'rb') as audio_file:
+                            response = safe_post(
+                                url,
+                                trust=URLTrust.OPERATOR_CONFIGURED,
+                                timeout=HTTP_TIMEOUT_WHISPER,
+                                max_redirects=HTTP_MAX_REDIRECTS_API,
+                                files={'file': (os.path.basename(transcribe_path), audio_file)},
+                                data=form_data,
+                                headers=headers,
+                            )
+                    except SSRFError as exc:
+                        logger.warning(f"Whisper API URL blocked: {exc}")
+                        return None
+                    except requests.RequestException as exc:
+                        logger.warning(
+                            "Whisper API attempt %d/%d failed: %s",
+                            attempt + 1, max_attempts, exc,
                         )
-                except SSRFError as exc:
-                    logger.warning(f"Whisper API URL blocked: {exc}")
-                    return None
-                except requests.RequestException as exc:
+                        response = None
+                        continue
+                    if response.status_code < 500:
+                        break
                     logger.warning(
-                        "Whisper API attempt %d/%d failed: %s",
-                        attempt + 1, max_attempts, exc,
+                        "Whisper API attempt %d/%d returned %d",
+                        attempt + 1, max_attempts, response.status_code,
                     )
-                    response = None
-                    continue
-                if response.status_code < 500:
-                    break
-                logger.warning(
-                    "Whisper API attempt %d/%d returned %d",
-                    attempt + 1, max_attempts, response.status_code,
-                )
 
-            if response is None or response.status_code >= 400:
+                if response is None:
+                    return None
+                if response.status_code == 200:
+                    break
+                if gran_idx == 0 and _whisper_api_rejects_word_timestamps(response):
+                    logger.warning(
+                        "Whisper API does not support word timestamps; "
+                        "retrying with segment-only timestamps"
+                    )
+                    continue
+                # Non-200 with no word-timestamp signal -- give up here.
+                break
+
+            if response is None or response.status_code != 200:
                 if response is not None:
                     logger.error(
                         "Whisper API failed: status=%s body=%r",
@@ -1108,11 +1178,20 @@ class Transcriber:
                     return None
                 logger.info(f"Audio file size: {size_mb:.1f}MB")
 
-            # Save to temp file
+            # Cap the stream independent of Content-Length (absent on chunked
+            # responses) so a feed enclosure can't fill the disk (transcription-1).
+            max_bytes = 500 * 1024 * 1024
             with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
-                for chunk in response.iter_content(chunk_size=8192):
-                    tmp.write(chunk)
                 temp_path = tmp.name
+                try:
+                    stream_to_file_capped(response, tmp, max_bytes)
+                except ResponseTooLargeError:
+                    logger.error(f"Audio stream over {max_bytes // (1024 * 1024)}MB cap: {safe_url_for_log(url)}")
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+                    return None
 
             logger.info(f"Downloaded audio to: {temp_path}")
             return temp_path
@@ -1186,11 +1265,19 @@ class Transcriber:
                     return None
                 logger.info(f"Audio file size: {size_mb:.1f}MB")
 
-            # Download with resume support
+            # Cap the total download independent of Content-Length (transcription-1/5).
+            max_bytes = 500 * 1024 * 1024
             mode = 'ab' if downloaded > 0 else 'wb'
             with open(temp_path, mode) as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                try:
+                    stream_to_file_capped(response, f, max_bytes, already=downloaded)
+                except ResponseTooLargeError:
+                    logger.error(f"Audio stream over {max_bytes // (1024 * 1024)}MB cap: {safe_url_for_log(url)}")
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+                    return None
 
             logger.info(f"Downloaded audio to: {temp_path}")
             return temp_path
@@ -1200,18 +1287,30 @@ class Transcriber:
             # Keep partial file for resume on next attempt
             return None
 
-    def transcribe(self, audio_path: str, podcast_name: str = None) -> List[Dict]:
+    def transcribe(
+        self,
+        audio_path: str,
+        podcast_name: str = None,
+        language_override: Optional[str] = None,
+    ) -> List[Dict]:
         """Transcribe audio file using Faster Whisper with batched pipeline.
 
         Uses adaptive batch sizing based on audio duration to prevent CUDA OOM errors.
         Automatically retries with smaller batch size on OOM.
+
+        `language_override` (when non-empty) takes precedence over the global
+        whisper_language setting for this call only -- used to honor per-feed
+        language overrides without mutating shared settings.
         """
         # Check whisper backend setting
         whisper_settings = _get_whisper_settings()
         if whisper_settings['backend'] == WHISPER_BACKEND_API:
-            return self._transcribe_via_api(audio_path, podcast_name, whisper_settings)
+            return self._transcribe_via_api(
+                audio_path, podcast_name, whisper_settings,
+                language_override=language_override,
+            )
 
-        language_setting = (whisper_settings.get('language') or 'en').strip().lower()
+        language_setting = _effective_language(language_override, whisper_settings)
         transcribe_language = None if language_setting == 'auto' else (language_setting or 'en')
 
         preprocessed_path = None
@@ -1542,7 +1641,12 @@ class Transcriber:
         )
         return all_segments
 
-    def transcribe_chunked(self, audio_path: str, podcast_name: str = None) -> List[Dict]:
+    def transcribe_chunked(
+        self,
+        audio_path: str,
+        podcast_name: str = None,
+        language_override: Optional[str] = None,
+    ) -> List[Dict]:
         """Transcribe audio files with dynamic chunking to prevent OOM errors.
 
         This method:
@@ -1554,6 +1658,9 @@ class Transcriber:
         Args:
             audio_path: Path to the audio file to transcribe
             podcast_name: Optional podcast name for context-aware prompting
+            language_override: Optional per-feed language; when set, takes
+                precedence over the global whisper_language setting for this
+                call only (forwarded to each chunk's transcribe()).
 
         Returns:
             List of transcript segments with timestamps, or None on failure
@@ -1588,7 +1695,7 @@ class Transcriber:
                 f"({chunk_duration/60:.0f}min), trying regular transcription"
             )
             try:
-                result = self.transcribe(audio_path, podcast_name)
+                result = self.transcribe(audio_path, podcast_name, language_override=language_override)
                 if result is not None:
                     return result
                 # If transcribe returns None but didn't raise, fall through to chunked
@@ -1649,7 +1756,7 @@ class Transcriber:
 
             try:
                 # Transcribe chunk (will handle its own batch sizing and retries)
-                chunk_segments = self.transcribe(chunk_path, podcast_name)
+                chunk_segments = self.transcribe(chunk_path, podcast_name, language_override=language_override)
 
                 if chunk_segments is None:
                     failed_chunks.append((chunk_start, chunk_end_with_overlap))

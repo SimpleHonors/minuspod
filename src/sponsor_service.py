@@ -2,6 +2,7 @@
 import re
 import json
 import logging
+import threading
 from typing import List, Dict, Optional
 
 from utils.constants import (
@@ -30,7 +31,14 @@ class SponsorService:
         # Cache freshness gate; payload lives on instance attrs above and
         # _compiled_patterns below. Single key '_loaded'.
         self._freshness = TTLCache(ttl_seconds=300.0)  # 5 minutes
+        self._cache_lock = threading.Lock()  # guards the cache rebuild
         self._compiled_patterns = {}  # {canonical_name: compiled_regex}
+        # Pre-compiled transcript display corrections. Convention: a
+        # normalization is treated as a transcript display correction if its
+        # replacement contains at least one uppercase character (e.g.
+        # "Wegovy"). Lowercase-only replacements (e.g. "ag1") are matcher
+        # canonicalizations and are skipped here.
+        self._cache_transcript_corrections = []
 
     @staticmethod
     def _parse_aliases(aliases) -> list:
@@ -45,36 +53,72 @@ class SponsorService:
         return []
 
     def _refresh_cache_if_needed(self):
-        """Cache for 5 minutes to avoid constant DB hits."""
+        """Cache for 5 minutes to avoid constant DB hits.
+
+        The rebuild is guarded by a lock and the freshness flag is flipped LAST
+        so parallel ad-detection threads can't race two concurrent rebuilds or
+        read a half-built cache (concurrency-sweep-1).
+        """
         if self._freshness.get('_loaded') is not None:
             return
 
-        self._cache_normalizations = self.db.get_sponsor_normalizations(active_only=True)
-        self._cache_sponsors = self.db.get_known_sponsors(active_only=True)
-        self._freshness.set('_loaded', True)
+        with self._cache_lock:
+            # Another thread may have rebuilt while we blocked on the lock.
+            if self._freshness.get('_loaded') is not None:
+                return
 
-        # Precompile word-boundary regex patterns for sponsor matching
-        self._compiled_patterns = {}
-        for sponsor in self._cache_sponsors:
-            name = sponsor['name']
-            if len(name) < 3:
-                continue
-            # Build pattern matching canonical name + all aliases
-            alternatives = [re.escape(name)]
-            for alias in self._parse_aliases(sponsor.get('aliases', '[]')):
-                if len(alias) >= 3:
-                    alternatives.append(re.escape(alias))
-            pattern_str = r'\b(?:' + '|'.join(alternatives) + r')\b'
-            self._compiled_patterns[name] = re.compile(pattern_str, re.IGNORECASE)
+            cache_normalizations = self.db.get_sponsor_normalizations(active_only=True)
+            cache_sponsors = self.db.get_known_sponsors(active_only=True)
 
-        logger.debug(f"Refreshed sponsor cache: {len(self._cache_sponsors)} sponsors, "
-                    f"{len(self._cache_normalizations)} normalizations")
+            # Build the transcript-correction list from the normalizations cache.
+            # Convention: any active normalization whose replacement contains an
+            # uppercase character is a display correction.
+            transcript_corrections = []
+            for norm in cache_normalizations or []:
+                replacement = norm.get('replacement', '')
+                if not any(c.isupper() for c in replacement):
+                    continue
+                try:
+                    compiled = re.compile(norm['pattern'], re.IGNORECASE)
+                except re.error as e:
+                    logger.warning(
+                        f"Skipping invalid transcript-correction regex "
+                        f"'{norm['pattern']}': {e}"
+                    )
+                    continue
+                transcript_corrections.append((compiled, replacement))
+
+            # Precompile word-boundary regex patterns for sponsor matching
+            compiled_patterns = {}
+            for sponsor in cache_sponsors:
+                name = sponsor['name']
+                if len(name) < 3:
+                    continue
+                # Build pattern matching canonical name + all aliases
+                alternatives = [re.escape(name)]
+                for alias in self._parse_aliases(sponsor.get('aliases', '[]')):
+                    if len(alias) >= 3:
+                        alternatives.append(re.escape(alias))
+                pattern_str = r'\b(?:' + '|'.join(alternatives) + r')\b'
+                compiled_patterns[name] = re.compile(pattern_str, re.IGNORECASE)
+
+            # Publish all caches, then flip the freshness flag last so no reader
+            # ever observes a partially-built cache.
+            self._cache_normalizations = cache_normalizations
+            self._cache_sponsors = cache_sponsors
+            self._cache_transcript_corrections = transcript_corrections
+            self._compiled_patterns = compiled_patterns
+            self._freshness.set('_loaded', True)
+
+            logger.debug(f"Refreshed sponsor cache: {len(cache_sponsors)} sponsors, "
+                        f"{len(cache_normalizations)} normalizations")
 
     def invalidate_cache(self):
         """Call after any updates."""
         self._freshness.clear()
         self._cache_normalizations = None
         self._cache_sponsors = None
+        self._cache_transcript_corrections = []
 
     # ========== Initialization ==========
 
@@ -141,6 +185,21 @@ class SponsorService:
 
         # Normalize whitespace
         return ' '.join(text.split())
+
+    def apply_transcript_corrections(self, text: str) -> str:
+        """Apply display-preserving corrections to transcript text.
+
+        Returns the input unchanged when no correction rule matches.
+        Casing and whitespace outside the matched span are preserved;
+        only entries whose replacement contains uppercase characters are
+        applied (see _refresh_cache_if_needed for the convention).
+        """
+        if not text:
+            return text
+        self._refresh_cache_if_needed()
+        for pattern, replacement in self._cache_transcript_corrections:
+            text = pattern.sub(replacement, text)
+        return text
 
     # ========== Sponsors ==========
 
@@ -346,12 +405,13 @@ class SponsorService:
             self.invalidate_cache()
         return result
 
-    def delete_sponsor(self, sponsor_id: int) -> bool:
-        """Delete (deactivate) a sponsor."""
-        result = self.db.delete_known_sponsor(sponsor_id)
-        if result:
+    def delete_sponsor(self, sponsor_id: int) -> tuple:
+        """Permanently delete a sponsor. Linked patterns are unlinked, not
+        deleted. Returns (deleted, unlinked_patterns)."""
+        deleted, unlinked = self.db.hard_delete_known_sponsor(sponsor_id)
+        if deleted:
             self.invalidate_cache()
-        return result
+        return deleted, unlinked
 
     def add_normalization(self, pattern: str, replacement: str, category: str) -> int:
         """Add a new normalization. Returns normalization ID."""

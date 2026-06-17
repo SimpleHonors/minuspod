@@ -35,6 +35,50 @@ INVALID_SPONSOR_VALUES = frozenset({
     'host read', 'host-read', 'mid-roll', 'pre-roll', 'post-roll'
 })
 
+# Claude occasionally returns a reasoning sentence in the `sponsor` slot
+# (e.g. "Inferred from ~26 second gap in transcript with no spoken content").
+# Reject any value that starts with one of these prefixes (case-insensitive)
+# or that contains an unambiguously meta substring. Real sponsor names never
+# do. The text_pattern_matcher rejects these later, but catching them at
+# parse time keeps junk out of the ad dict in the first place.
+SPONSOR_REASONING_PREFIXES = (
+    'inferred from', 'inferred', 'based on', 'according to',
+    'likely ', 'possibly ', 'may be ', 'appears to ', 'seems to ',
+    'detected as ', 'classified as ',
+)
+SPONSOR_REASONING_SUBSTRINGS = (
+    ' in transcript', 'audio signal', 'no spoken content',
+    'gap in transcript', 'volume anomaly',
+)
+SPONSOR_MAX_NAME_CHARS = 60
+
+
+def is_sponsor_reasoning_rationale(text) -> bool:
+    """True if `text` looks like an LLM reasoning sentence stored in a slot
+    that should hold a brand name or ad description.
+
+    Single source of truth for the 2.5.11 sponsor-field guard
+    (ad_detector/prompts.py:get_valid_value), the 2.5.13 verification-miss
+    `reason` filter (pattern_service.record_verification_misses), and the
+    `_cleanup_low_mention_patterns` migration.
+    """
+    if not text:
+        return False
+    lowered = str(text).strip().lower()
+    if lowered.startswith(SPONSOR_REASONING_PREFIXES):
+        return True
+    if any(s in lowered for s in SPONSOR_REASONING_SUBSTRINGS):
+        return True
+    return False
+
+
+# First-pass-learning and verification-miss confidence floors. Single source
+# of truth so the two auto-pattern paths share one trust model
+# (ad_detector._ad_passes_learning_filters, pattern_service.record_verification_misses).
+LEARNING_MIN_CONFIDENCE = 0.85
+LEARNING_MIN_CONFIDENCE_LONG = 0.92
+LEARNING_LONG_DURATION_THRESHOLD = 90.0
+
 # Structural fields in LLM ad response objects that never contain sponsor info.
 # Everything NOT in this set is a candidate for dynamic field scanning.
 STRUCTURAL_FIELDS = frozenset({
@@ -424,7 +468,6 @@ SEED_SPONSORS = [
     {"name": "Hims", "aliases": [], "category": "health"},
     {"name": "Hers", "aliases": [], "category": "health"},
     {"name": "Roman", "aliases": [], "category": "health"},
-    {"name": "Keeps", "aliases": [], "category": "health"},
     {"name": "Function of Beauty", "aliases": [], "category": "personal"},
     {"name": "Native", "aliases": [], "category": "personal"},
     {"name": "Liquid IV", "aliases": ["Liquid I.V."], "category": "health"},
@@ -732,6 +775,11 @@ SEED_NORMALIZATIONS = [
     {"pattern": r"\bfree\s+shipping\b", "replacement": "free shipping", "category": "phrase"},
     {"pattern": r"\bfree\s+trial\b", "replacement": "free trial", "category": "phrase"},
     {"pattern": r"\bmoney\s+back\s+guarantee\b", "replacement": "money back guarantee", "category": "phrase"},
+
+    # Transcript display corrections. Mixed-case replacement opts in to the
+    # transcript-correction code path; see SponsorService.apply_transcript_corrections.
+    {"pattern": r"\bWeGoV\b", "replacement": "Wegovy", "category": "phrase"},
+    {"pattern": r"\bwe\s+go\s+v\b", "replacement": "Wegovy", "category": "phrase"},
 ]
 
 
@@ -788,7 +836,7 @@ URLs, promo codes, product pitches, calls to action) to flag a segment as an ad.
 or silence gap with no promotional language is just normal audio production -- not an ad.
 
 COMMON PODCAST SPONSORS (high confidence if mentioned):
-BetterHelp, Athletic Greens, AG1, Shopify, Amazon, Audible, Squarespace, HelloFresh, Factor, NordVPN, ExpressVPN, Mint Mobile, MasterClass, Calm, Headspace, ZipRecruiter, Indeed, LinkedIn Jobs, LinkedIn, Stamps.com, SimpliSafe, Ring, ADT, Casper, Helix Sleep, Purple, Brooklinen, Bombas, Manscaped, Dollar Shave Club, Harry's, Quip, Hims, Hers, Roman, Keeps, Function of Beauty, Native, Liquid IV, Athletic Brewing, Magic Spoon, Thrive Market, Butcher Box, Blue Apron, DoorDash, Uber Eats, Grubhub, Instacart, Rocket Money, Credit Karma, SoFi, Acorns, Betterment, Wealthfront, PolicyGenius, Lemonade, State Farm, Progressive, Geico, Liberty Mutual, T-Mobile, Visible, FanDuel, DraftKings, BetMGM, Toyota, Hyundai, CarMax, Carvana, eBay Motors, ZocDoc, GoodRx, Care/of, Ritual, Seed, HubSpot, NetSuite, Monday.com, Notion, Canva, Grammarly, Babbel, Rosetta Stone, Blinkist, Raycon, Bose, MacPaw, CleanMyMac, Green Chef, Magic Mind, Honeylove, Cozy Earth, Quince, LMNT, Nutrafol, Aura, OneSkin, Incogni, Gametime, 1Password, Bitwarden, CacheFly, Deel, DeleteMe, Framer, Miro, Monarch Money, OutSystems, Spaceship, Thinkst Canary, ThreatLocker, Vanta, Veeam, Zapier, Zscaler, Capital One, Ford, WhatsApp
+BetterHelp, Athletic Greens, AG1, Shopify, Amazon, Audible, Squarespace, HelloFresh, Factor, NordVPN, ExpressVPN, Mint Mobile, MasterClass, Calm, Headspace, ZipRecruiter, Indeed, LinkedIn Jobs, LinkedIn, Stamps.com, SimpliSafe, Ring, ADT, Casper, Helix Sleep, Purple, Brooklinen, Bombas, Manscaped, Dollar Shave Club, Harry's, Quip, Hims, Hers, Roman, Function of Beauty, Native, Liquid IV, Athletic Brewing, Magic Spoon, Thrive Market, Butcher Box, Blue Apron, DoorDash, Uber Eats, Grubhub, Instacart, Rocket Money, Credit Karma, SoFi, Acorns, Betterment, Wealthfront, PolicyGenius, Lemonade, State Farm, Progressive, Geico, Liberty Mutual, T-Mobile, Visible, FanDuel, DraftKings, BetMGM, Toyota, Hyundai, CarMax, Carvana, eBay Motors, ZocDoc, GoodRx, Care/of, Ritual, Seed, HubSpot, NetSuite, Monday.com, Notion, Canva, Grammarly, Babbel, Rosetta Stone, Blinkist, Raycon, Bose, MacPaw, CleanMyMac, Green Chef, Magic Mind, Honeylove, Cozy Earth, Quince, LMNT, Nutrafol, Aura, OneSkin, Incogni, Gametime, 1Password, Bitwarden, CacheFly, Deel, DeleteMe, Framer, Miro, Monarch Money, OutSystems, Spaceship, Thinkst Canary, ThreatLocker, Vanta, Veeam, Zapier, Zscaler, Capital One, Ford, WhatsApp
 
 RETAIL/CONSUMER BRANDS (network-inserted ads):
 Nordstrom, Macy's, Target, Walmart, Kohl's, Bloomingdale's, JCPenney, TJ Maxx, Home Depot, Lowe's, Best Buy, Costco, Gap, Old Navy, H&M, Zara, Nike, Adidas, Lululemon, Coach, Kate Spade, Michael Kors, Sephora, Ulta, Bath & Body Works, CVS, Walgreens, AutoZone, O'Reilly Auto Parts, Jiffy Lube, Midas, Gold Belly, Farmer's Dog, Caldera Lab, Monster Energy, Red Bull, Whole Foods, Trader Joe's, Kroger, GNC

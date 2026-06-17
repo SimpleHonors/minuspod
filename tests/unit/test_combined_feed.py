@@ -108,7 +108,7 @@ class TestBuildCombinedFeed:
         return base
 
     def test_renders_well_formed_rss_with_n_items(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         episodes = [
             self._episode(),
             self._episode(
@@ -128,7 +128,7 @@ class TestBuildCombinedFeed:
         assert root.find('./channel/title').text == 'MinusPod — All Podcasts'
 
     def test_prefixes_podcast_title_in_episode_title(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         xml = parser.build_combined_feed([self._episode()])
 
         root = ET.fromstring(xml)
@@ -136,24 +136,24 @@ class TestBuildCombinedFeed:
         assert title == '[Alpha Show] Alpha Episode 2'
 
     def test_enclosure_url_uses_per_episode_route_shape(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         xml = parser.build_combined_feed([self._episode()])
 
         root = ET.fromstring(xml)
         encl = root.find('./channel/item/enclosure')
-        assert encl.attrib['url'] == 'http://10.0.0.190:8080/episodes/alpha/a2.mp3'
+        assert encl.attrib['url'] == 'http://podcast.example:8080/episodes/alpha/a2.mp3'
         assert encl.attrib['type'] == 'audio/mpeg'
 
     def test_versioned_processed_file_url(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         xml = parser.build_combined_feed(
             [self._episode(processed_version=2)])
 
         encl = ET.fromstring(xml).find('./channel/item/enclosure')
-        assert encl.attrib['url'] == 'http://10.0.0.190:8080/episodes/alpha/a2-v2.mp3'
+        assert encl.attrib['url'] == 'http://podcast.example:8080/episodes/alpha/a2-v2.mp3'
 
     def test_guid_is_namespaced_by_slug_to_avoid_collision(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         # Two podcasts that happen to share an episode_id
         eps = [
             self._episode(episode_id='shared'),
@@ -168,7 +168,7 @@ class TestBuildCombinedFeed:
         assert guids == ['alpha::shared', 'beta::shared']
 
     def test_empty_episode_list_returns_valid_empty_channel(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         xml = parser.build_combined_feed([])
 
         root = ET.fromstring(xml)
@@ -176,20 +176,20 @@ class TestBuildCombinedFeed:
         assert root.findall('./channel/item') == []
 
     def test_channel_artwork_points_at_minuspod_logo(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         xml = parser.build_combined_feed([self._episode()])
 
         root = ET.fromstring(xml)
         image_url = root.find('./channel/image/url').text
-        assert image_url == 'http://10.0.0.190:8080/ui/feed-icon.png'
+        assert image_url == 'http://podcast.example:8080/ui/feed-icon.png'
         # itunes:image with the same href (Apple Podcasts requires it)
         ns = {'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'}
         itunes_image = root.find('./channel/itunes:image', ns)
         assert itunes_image is not None
-        assert itunes_image.attrib['href'] == 'http://10.0.0.190:8080/ui/feed-icon.png'
+        assert itunes_image.attrib['href'] == 'http://podcast.example:8080/ui/feed-icon.png'
 
     def test_skips_rows_missing_required_keys(self):
-        parser = RSSParser(base_url='http://10.0.0.190:8080')
+        parser = RSSParser(base_url='http://podcast.example:8080')
         # Missing podcast_slug — must be silently dropped, not raise.
         eps = [
             self._episode(),

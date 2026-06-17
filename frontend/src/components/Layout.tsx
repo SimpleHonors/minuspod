@@ -8,6 +8,7 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/add', label: 'Add Feed' },
   { to: '/inbox', label: 'Ad Inbox' },
   { to: '/patterns', label: 'Patterns' },
+  { to: '/sponsors', label: 'Sponsors' },
   { to: '/history', label: 'History' },
   { to: '/stats', label: 'Stats' },
   { to: '/settings', label: 'Settings' },

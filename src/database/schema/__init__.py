@@ -1,10 +1,12 @@
 """Schema initialization and migration mixin for MinusPod database."""
+import fcntl
 import sqlite3
 import logging
 import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List
 
@@ -13,30 +15,69 @@ logger = logging.getLogger(__name__)
 
 # SQL DDL constants live in tables.py - re-exported for backward compat
 from database.schema.tables import SCHEMA_SQL, MIGRATION_INDEXES_SQL
+from community_export import find_foreign_sponsors, declared_sponsor_names_lower
+
+
+@contextmanager
+def _migration_file_lock(data_dir):
+    """Cross-process serializing lock for schema migrations.
+
+    Gunicorn runs 2 workers; both fork into Database.__init__ and race the
+    schema init path. The work is idempotent, but each worker emits its own
+    "Migration: Created X" log line and doubles the SQLite write contention.
+    Worker B blocks here until Worker A releases, then walks the
+    already-stamped revision flags and short-circuits each gate.
+    """
+    lock_path = os.path.join(str(data_dir), '.migration.lock')
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 class SchemaMixin:
     """Schema initialization and migration methods."""
 
-    def _init_schema(self):
-        """Initialize database schema with retry logic for concurrent workers."""
-        max_retries = 5
-        base_delay = 0.5  # seconds
+    @staticmethod
+    def _table_exists(conn, name: str) -> bool:
+        """True iff a table or view named `name` is registered in sqlite_master."""
+        cursor = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
+            (name,),
+        )
+        return cursor.fetchone() is not None
 
-        for attempt in range(max_retries):
-            try:
-                self._init_schema_inner()
-                return
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(
-                        f"Database locked during schema init, retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(delay)
-                else:
-                    raise
+    def _init_schema(self):
+        """Initialize database schema with cross-worker serialization + retry.
+
+        The fcntl lock serializes the second gunicorn worker behind the first;
+        the retry loop survives any remaining SQLite contention from other
+        processes (manual sqlite3 sessions, ad-hoc scripts) that bypass the
+        file lock.
+        """
+        with _migration_file_lock(self.data_dir):
+            max_retries = 5
+            base_delay = 0.5  # seconds
+
+            for attempt in range(max_retries):
+                try:
+                    self._init_schema_inner()
+                    return
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) and attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        logger.warning(
+                            f"Database locked during schema init, retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise
 
     def _init_schema_inner(self):
         """Initialize database schema (inner method called with retry wrapper)."""
@@ -51,7 +92,7 @@ class SchemaMixin:
         if is_existing_db:
             # For existing databases, only create new tables and run migrations
             # Don't run full SCHEMA_SQL as indexes may reference columns that don't exist yet
-            logger.info(f"Existing database found at {self.db_path}, running migrations...")
+            logger.debug(f"Existing database found at {self.db_path}, running migrations...")
             self._create_new_tables_only(conn)
             self._run_schema_migrations()
         else:
@@ -64,6 +105,10 @@ class SchemaMixin:
 
     def _create_new_tables_only(self, conn):
         """Create new tables for existing databases without running indexes."""
+        # Sentinel: ad_reviewer_log is the last table created in this block.
+        # If it already exists, every other CREATE IF NOT EXISTS below is a
+        # no-op too, so we can skip the boot "Created new tables..." log.
+        sentinel_existed = self._table_exists(conn, 'ad_reviewer_log')
         # Create ad_patterns table if not exists (must match SCHEMA_SQL exactly)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS ad_patterns (
@@ -164,6 +209,7 @@ class SchemaMixin:
                 processing_duration_seconds REAL,
                 status TEXT NOT NULL CHECK(status IN ('completed', 'failed')),
                 ads_detected INTEGER DEFAULT 0,
+                audio_cues_detected INTEGER DEFAULT 0,
                 error_message TEXT,
                 reprocess_number INTEGER DEFAULT 1,
                 input_tokens INTEGER DEFAULT 0,
@@ -236,7 +282,8 @@ class SchemaMixin:
         )
 
         conn.commit()
-        logger.info("Created new tables for cross-episode training and processing history")
+        if not sentinel_existed:
+            logger.info("Created new tables for cross-episode training and processing history")
 
     def _add_column_if_missing(self, conn, table: str, column: str,
                                definition: str, existing_columns: set) -> bool:
@@ -280,6 +327,17 @@ class SchemaMixin:
         from database.settings import DEFAULT_MODEL_PRICING
 
         conn = self.get_connection()
+
+        # Ensure schema_migrations exists before any sub-step references
+        # it. Avoids cascading failures if an earlier sub-migration fails
+        # before reaching its own CREATE TABLE IF NOT EXISTS.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            )
+        """)
+        conn.commit()
 
         # -- Episodes table columns --
         ep_cols = self._get_table_columns(conn, 'episodes')
@@ -335,6 +393,8 @@ class SchemaMixin:
             ('audio_analysis_override', 'TEXT'),
             ('created_at', "TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"),
             ('auto_process_override', 'TEXT'),
+            ('language_override', 'TEXT'),
+            ('title_override', 'TEXT'),
             ('skip_second_pass', 'INTEGER DEFAULT 0'),
             ('max_episodes', 'INTEGER'),
             ('etag', 'TEXT'),
@@ -467,7 +527,11 @@ class SchemaMixin:
                 cursor = conn.execute("PRAGMA table_info(episodes)")
                 old_columns = [row['name'] for row in cursor.fetchall()]
 
-                # 1. Create new table with correct constraint (matches current SCHEMA_SQL)
+                # 1. Create new table with correct constraint (matches current SCHEMA_SQL).
+                # Drop any orphan _new table left by an interrupted prior run so a
+                # re-entry after a crash is idempotent rather than a fatal
+                # "table episodes_new already exists" boot crash-loop (db-schema-1).
+                conn.execute("DROP TABLE IF EXISTS episodes_new")
                 conn.execute("""
                     CREATE TABLE episodes_new (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -525,6 +589,13 @@ class SchemaMixin:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast ON episodes(podcast_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_status ON episodes(status)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_processed_at ON episodes(processed_at)")
+                # Recreate the rest of the fresh-schema lookup indexes that
+                # DROP TABLE episodes removed, so a migrated DB matches a fresh
+                # one (db-schema-2 / db-schema-7).
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast_id ON episodes(podcast_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_episode_id ON episodes(episode_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast_episode ON episodes(podcast_id, episode_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_created_at ON episodes(created_at)")
 
                 conn.commit()
 
@@ -545,6 +616,8 @@ class SchemaMixin:
                 cursor = conn.execute("PRAGMA table_info(episodes)")
                 old_columns = [row['name'] for row in cursor.fetchall()]
 
+                # Idempotent re-entry: clear any orphan _new from an interrupted run.
+                conn.execute("DROP TABLE IF EXISTS episodes_new")
                 conn.execute("""
                     CREATE TABLE episodes_new (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -594,6 +667,12 @@ class SchemaMixin:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast ON episodes(podcast_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_status ON episodes(status)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_processed_at ON episodes(processed_at)")
+                # Recreate the rest of the fresh-schema lookup indexes that
+                # DROP TABLE episodes removed (db-schema-2 / db-schema-7).
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast_id ON episodes(podcast_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_episode_id ON episodes(episode_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast_episode ON episodes(podcast_id, episode_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_created_at ON episodes(created_at)")
 
                 conn.commit()
 
@@ -606,6 +685,7 @@ class SchemaMixin:
 
         # Migration: Create auto_process_queue table if not exists
         try:
+            fresh = not self._table_exists(conn, 'auto_process_queue')
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS auto_process_queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -626,7 +706,8 @@ class SchemaMixin:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_created ON auto_process_queue(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_queue_podcast_episode ON auto_process_queue(podcast_id, episode_id)")
             conn.commit()
-            logger.info("Migration: Created auto_process_queue table")
+            if fresh:
+                logger.info("Migration: Created auto_process_queue table")
         except Exception as e:
             logger.debug(f"auto_process_queue table creation (may already exist): {e}")
 
@@ -687,6 +768,7 @@ class SchemaMixin:
 
         # Migration: Create FTS5 search index table
         try:
+            fresh = not self._table_exists(conn, 'search_index')
             conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
                     content_type,
@@ -699,7 +781,8 @@ class SchemaMixin:
                 )
             """)
             conn.commit()
-            logger.info("Migration: Created FTS5 search_index table")
+            if fresh:
+                logger.info("Migration: Created FTS5 search_index table")
         except Exception as e:
             logger.debug(f"FTS5 search_index creation (may already exist): {e}")
 
@@ -715,6 +798,7 @@ class SchemaMixin:
 
         # Migration: Create auth_failures table for login-lockout tracking
         try:
+            fresh = not self._table_exists(conn, 'auth_failures')
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS auth_failures (
                     ip TEXT PRIMARY KEY,
@@ -728,7 +812,8 @@ class SchemaMixin:
                 "CREATE INDEX IF NOT EXISTS idx_auth_failures_last ON auth_failures(last_failed_at)"
             )
             conn.commit()
-            logger.info("Migration: Created auth_failures table")
+            if fresh:
+                logger.info("Migration: Created auth_failures table")
         except Exception as e:
             logger.debug(f"auth_failures table creation (may already exist): {e}")
 
@@ -827,6 +912,7 @@ class SchemaMixin:
 
         # Migration: Create token usage tables and seed default model pricing
         try:
+            fresh = not self._table_exists(conn, 'model_pricing')
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS model_pricing (
                     model_id TEXT PRIMARY KEY,
@@ -863,7 +949,8 @@ class SchemaMixin:
                     (model_id, info['name'], info['input'], info['output'])
                 )
             conn.commit()
-            logger.info("Migration: Created token usage tables and seeded model pricing")
+            if fresh:
+                logger.info("Migration: Created token usage tables and seeded model pricing")
         except Exception as e:
             logger.warning(f"Migration failed for token usage tables: {e}")
 
@@ -875,24 +962,38 @@ class SchemaMixin:
             self._add_column_if_missing(conn, 'model_pricing', 'raw_model_id', 'TEXT', mp_cols)
             self._add_column_if_missing(conn, 'model_pricing', 'source', "TEXT DEFAULT 'legacy'", mp_cols)
 
-            # Backfill match_key for existing rows
+            # Backfill match_key for existing rows. Skip any row whose normalized
+            # key is already owned by another row: that NULL-match_key row is a
+            # redundant duplicate (cost lookups go by match_key, so it is never
+            # used). Forcing the UPDATE would hit the UNIQUE index and abort the
+            # whole migration, leaving the row NULL to re-fail on every restart.
             rows = conn.execute(
                 "SELECT model_id FROM model_pricing WHERE match_key IS NULL"
             ).fetchall()
             if rows:
+                backfilled = 0
                 for row in rows:
                     key = normalize_model_key(row['model_id'])
+                    taken = conn.execute(
+                        "SELECT 1 FROM model_pricing WHERE match_key = ? LIMIT 1",
+                        (key,)
+                    ).fetchone()
+                    if taken:
+                        continue
                     conn.execute(
                         "UPDATE model_pricing SET match_key = ?, raw_model_id = ? WHERE model_id = ?",
                         (key, row['model_id'], row['model_id'])
                     )
+                    backfilled += 1
 
-                # Deduplicate: if multiple model_ids map to the same match_key,
-                # keep the row with the highest rowid per match_key
+                # Deduplicate real (non-NULL) collisions, keeping the highest
+                # rowid per match_key. NULL match_keys are left alone -- they are
+                # un-keyable duplicates, not rows to delete.
                 dupes = conn.execute("""
                     SELECT model_id, match_key FROM model_pricing
-                    WHERE rowid NOT IN (
+                    WHERE match_key IS NOT NULL AND rowid NOT IN (
                         SELECT MAX(rowid) FROM model_pricing
+                        WHERE match_key IS NOT NULL
                         GROUP BY match_key
                     )
                 """).fetchall()
@@ -902,13 +1003,15 @@ class SchemaMixin:
                                     f"model_id={dupe['model_id']} match_key={dupe['match_key']}")
                     conn.execute("""
                         DELETE FROM model_pricing
-                        WHERE rowid NOT IN (
+                        WHERE match_key IS NOT NULL AND rowid NOT IN (
                             SELECT MAX(rowid) FROM model_pricing
+                            WHERE match_key IS NOT NULL
                             GROUP BY match_key
                         )
                     """)
                 conn.commit()
-                logger.info(f"Migration: Backfilled match_key for {len(rows)} model_pricing rows")
+                if backfilled:
+                    logger.info(f"Migration: Backfilled match_key for {backfilled} model_pricing rows")
 
             # Create UNIQUE index on match_key (after backfill + dedup)
             conn.execute(
@@ -942,6 +1045,7 @@ class SchemaMixin:
             ('input_tokens', 'INTEGER DEFAULT 0'),
             ('output_tokens', 'INTEGER DEFAULT 0'),
             ('llm_cost', 'REAL DEFAULT 0.0'),
+            ('audio_cues_detected', 'INTEGER DEFAULT 0'),
         ]:
             self._add_column_if_missing(conn, 'processing_history', col, definition, hist_cols)
 
@@ -1017,6 +1121,23 @@ class SchemaMixin:
         # doesn't update what the editor displays for already-detected ads.
         self._cleanup_zyn_ad_markers(conn)
 
+        # 2.5.7: retire kitchen-sink ad_patterns that name multiple foreign
+        # sponsors in their text_template. The merge guard prevents new ones
+        # going forward; this disables what's already there.
+        try:
+            self._cleanup_multi_sponsor_patterns(conn)
+        except Exception as e:
+            logger.warning(f"Multi-sponsor pattern cleanup failed: {e}")
+
+        # 2.5.13: retire patterns whose sponsor name appears <2 times in the
+        # text_template. Real ads repeat the brand; a single mention is a
+        # host name-drop the verification pass mis-classified. The
+        # create_pattern_from_ad guard prevents new ones going forward.
+        try:
+            self._cleanup_low_mention_patterns(conn)
+        except Exception as e:
+            logger.warning(f"Low-mention pattern cleanup failed: {e}")
+
         # Sponsor seed reseed (2.4.0): CSV is authoritative. Runs LAST so
         # `_migrate_sponsor_fk` has already deduped case-variants from
         # legacy v2.1.x rows; the reseed then operates on the canonical
@@ -1046,6 +1167,426 @@ class SchemaMixin:
             self._normalize_community_scope(conn)
         except Exception as e:
             logger.error(f"Community scope normalize failed: {e}")
+
+        # ENV_BACKED_SETTINGS registry sync (2.5.23+). Runs on every boot,
+        # idempotent. See src/config.py ENV_BACKED_SETTINGS for the full
+        # contract. Never overwrites a row's value during the corrective
+        # pass -- only flips is_default in the protective direction.
+        try:
+            self._run_env_backed_settings_migration(conn)
+        except Exception as e:
+            logger.error(f"env-backed settings migration failed: {e}")
+
+        # One-shot backfill of processing_history.ads_detected (2.5.29).
+        # See _run_backfill_history_ads_detected for the bug + predicate.
+        # rollback() here is safe to scope to this migration's writes only
+        # because the CREATE TABLE schema_migrations + commit() at the top
+        # of this method finalized any prior sub-migration's transaction.
+        try:
+            self._run_backfill_history_ads_detected(conn)
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"history ads_detected backfill failed: {e}")
+
+        # v2 backfill (2.5.30) with corrected predicate. The v1 pass
+        # compared history.ads_detected against episodes.ads_removed_firstpass,
+        # which is pass-1 DETECTION count (pre-reviewer), not pass-1 CUTS
+        # (post-reviewer). The buggy 2.5.27 writer captured cuts, so v1
+        # only matched episodes where the reviewer rejected zero ads. v2
+        # uses (ads_removed - ads_removed_secondpass) which equals pass-1
+        # cuts post-reviewer regardless of how many the reviewer rejected
+        # or resurrected.
+        try:
+            self._run_backfill_history_ads_detected_v2(conn)
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"history ads_detected v2 backfill failed: {e}")
+
+        # One-shot correction of Opus 4.8 token cost (2.6.2). Calls booked at
+        # 15/75 (Opus 4.0, via prefix-match fallback) instead of 5/25.
+        try:
+            self._run_correct_opus48_token_cost(conn)
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"opus 4.8 token cost correction failed: {e}")
+
+    def _run_correct_opus48_token_cost(self, conn):
+        """One-time correction of recorded Opus 4.8 (`claudeopus48`) token cost.
+
+        Before the missing-default fix, Opus 4.8 calls fell through the exact
+        pricing lookup and prefix-matched `claudeopus4` (Opus 4.0) at 15/75 USD
+        per Mtok instead of the correct 5/25, so `token_usage.total_cost` and the
+        global `stats.total_llm_cost` were over-booked ~3x.
+
+        Gated by `schema_migrations` so it runs once per database. Writes are
+        absolute (not delta adjustments): the per-model row is set to the
+        recomputed cost and, when a row was corrected, the global counter is reset
+        to the sum of all per-model rows -- so the result is identical on re-run
+        (e.g. concurrent workers). A database that never used Opus 4.8 is left
+        untouched. No rows are deleted. (`record_token_usage` increments both
+        counters by the same per-call cost, so the global equals the sum of
+        per-model rows by construction.)
+        """
+        gate = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = 'correct_opus48_token_cost'"
+        ).fetchone()
+        if gate is not None:
+            return
+
+        from database.settings import DEFAULT_MODEL_PRICING
+
+        info = DEFAULT_MODEL_PRICING['claude-opus-4-8']
+        in_per_mtok = info['input']
+        out_per_mtok = info['output']
+
+        # Ensure the corrected pricing row exists regardless of whether a live
+        # fetch has run; harmless if the live source already populated it.
+        conn.execute(
+            """INSERT INTO model_pricing
+                   (model_id, match_key, raw_model_id, display_name,
+                    input_cost_per_mtok, output_cost_per_mtok, source)
+               VALUES ('claude-opus-4-8', 'claudeopus48', 'claude-opus-4-8', ?, ?, ?, 'default')
+               ON CONFLICT(match_key) DO NOTHING""",
+            (info['name'], in_per_mtok, out_per_mtok),
+        )
+
+        row = conn.execute(
+            """SELECT total_input_tokens, total_output_tokens, total_cost
+               FROM token_usage WHERE match_key = 'claudeopus48'"""
+        ).fetchone()
+
+        if row is not None:
+            new_cost = (
+                (row['total_input_tokens'] / 1_000_000) * in_per_mtok
+                + (row['total_output_tokens'] / 1_000_000) * out_per_mtok
+            )
+            conn.execute(
+                "UPDATE token_usage SET total_cost = ? WHERE match_key = 'claudeopus48'",
+                (new_cost,),
+            )
+            # Reset the global counter to the sum of per-model rows (absolute, so
+            # the result is identical on re-run). Scoped to the case where an Opus
+            # 4.8 row was actually corrected -- a database that never used Opus 4.8
+            # is left untouched rather than having its global silently rewritten.
+            conn.execute(
+                """UPDATE stats
+                   SET value = (SELECT COALESCE(SUM(total_cost), 0) FROM token_usage)
+                   WHERE key = 'total_llm_cost'"""
+            )
+            logger.info(
+                "opus48-cost-fix: claudeopus48 total_cost %.6f -> %.6f "
+                "(in=%s out=%s @ %s/%s per Mtok)",
+                row['total_cost'], new_cost,
+                row['total_input_tokens'], row['total_output_tokens'],
+                in_per_mtok, out_per_mtok,
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES "
+            "('correct_opus48_token_cost')"
+        )
+        conn.commit()
+        logger.info("opus48-cost-fix: complete")
+
+    def _run_backfill_history_ads_detected(self, conn):
+        """One-shot correction of ``processing_history.ads_detected``
+        rows undercounted by the verification re-cut.
+
+        Pre-2.5.28 bug: ``_record_history_and_event`` recorded
+        ``len(ads_to_remove)`` (pass-1-after-reviewer only) and ignored
+        the ``verification_count`` parameter. The ``episodes`` table
+        had the correct total stored via ``_persist_episode_state``.
+
+        Safe-update predicate: for each (podcast_id, episode_id) pair,
+        find the latest completed history row and update it only when
+        all of:
+        - status='completed' (failed rows have ads_detected=0 by design)
+        - matching episode row exists
+        - episode.ads_removed_secondpass > 0 (the bug only undercounted
+          episodes that had a verification re-cut)
+        - history.ads_detected == episode.ads_removed_firstpass (the
+          exact bug signature: history captured pass-1, the true total
+          is firstpass + secondpass)
+        - history.ads_detected != episode.ads_removed (skip rows that
+          already happen to be correct)
+
+        Non-latest history rows (earlier reprocesses) are left alone
+        because the episodes row only retains the latest state.
+
+        Gated by ``schema_migrations`` so the migration runs once per
+        database. Logs each update at INFO with before/after values.
+
+        Multi-worker race: two gunicorn workers can both pass the gate
+        SELECT, both run the UPDATE loop (idempotent: same value writes
+        on already-corrected rows), and both attempt the gate INSERT.
+        ``INSERT OR IGNORE`` makes the second INSERT a silent no-op, so
+        the only operator-visible effect is that both workers log their
+        per-row update lines. Acceptable; cleaner serialization would
+        require ``BEGIN IMMEDIATE`` which conflicts with Python's
+        sqlite3 auto-begin under deferred isolation.
+        """
+        gate = conn.execute(
+            "SELECT 1 FROM schema_migrations "
+            "WHERE name = 'backfill_history_ads_detected_for_verification'"
+        ).fetchone()
+        if gate is not None:
+            return
+
+        # Predicates intentionally use raw columns (no COALESCE): SQL's
+        # three-valued logic evaluates NULL comparisons to NULL (falsy
+        # in WHERE), so legacy rows with NULL ads_removed/firstpass/
+        # secondpass are excluded automatically. COALESCE-to-0 would
+        # match those rows and overwrite ads_detected with 0.
+        rows = conn.execute("""
+            WITH ranked AS (
+                SELECT h.id AS history_id,
+                       h.podcast_id,
+                       h.episode_id,
+                       h.ads_detected AS old_ads_detected,
+                       e.ads_removed AS true_total,
+                       e.ads_removed_firstpass,
+                       e.ads_removed_secondpass,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY h.podcast_id, h.episode_id
+                           ORDER BY h.processed_at DESC, h.id DESC
+                       ) AS rn
+                FROM processing_history h
+                JOIN episodes e
+                  ON e.podcast_id = h.podcast_id
+                 AND e.episode_id = h.episode_id
+                WHERE h.status = 'completed'
+            )
+            SELECT history_id, podcast_id, episode_id,
+                   old_ads_detected, true_total,
+                   ads_removed_firstpass, ads_removed_secondpass
+            FROM ranked
+            WHERE rn = 1
+              AND ads_removed_secondpass > 0
+              AND old_ads_detected = ads_removed_firstpass
+              AND old_ads_detected != true_total
+        """).fetchall()
+
+        updated = 0
+        for row in rows:
+            conn.execute(
+                "UPDATE processing_history SET ads_detected = ? WHERE id = ?",
+                (row['true_total'], row['history_id']),
+            )
+            updated += 1
+            logger.info(
+                f"history-backfill: podcast_id={row['podcast_id']} "
+                f"episode_id={row['episode_id']} "
+                f"ads_detected {row['old_ads_detected']} -> {row['true_total']} "
+                f"(firstpass={row['ads_removed_firstpass']} + "
+                f"secondpass={row['ads_removed_secondpass']})"
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES "
+            "('backfill_history_ads_detected_for_verification')"
+        )
+        conn.commit()
+        logger.info(f"history-backfill: complete, {updated} row(s) corrected")
+
+    def _run_backfill_history_ads_detected_v2(self, conn):
+        """v2 correction of ``processing_history.ads_detected``.
+
+        v1 predicate compared ``history.ads_detected`` against
+        ``episodes.ads_removed_firstpass``, but ``firstpass`` stores the
+        pass-1 DETECTION count (pre-reviewer) at
+        ``processing.py:_detect_ads_first_pass:340``, not the
+        post-reviewer CUTS that the buggy 2.5.27 writer captured. v1
+        only matched episodes where the reviewer rejected zero ads, so
+        episodes like macbreak-weekly-audio:2d9ccd57b93b (firstpass
+        detection=10, reviewer kept 6, verification=2, total cuts=8)
+        stayed at the wrong history value of 6.
+
+        v2 predicate derives pass-1 cuts as ``ads_removed -
+        ads_removed_secondpass``, which equals the buggy writer's value
+        regardless of how many ads the reviewer rejected or resurrected.
+
+        Safe-update predicate (only the LATEST history row per episode):
+        - status='completed'
+        - matching episode row exists
+        - ads_removed_secondpass > 0 (bug only undercounted episodes
+          where verification re-cut ran)
+        - history.ads_detected == ads_removed - ads_removed_secondpass
+          (the buggy writer's value, derived correctly)
+        - history.ads_detected != ads_removed (skip already correct or
+          already-v1-corrected; v1-corrected rows have ads_detected ==
+          ads_removed, so this clause naturally excludes them)
+
+        Gated by ``schema_migrations`` row
+        ``backfill_history_ads_detected_v2_postreviewer_cuts``. v1's
+        gate stays set, so v1 never re-runs.
+        """
+        gate = conn.execute(
+            "SELECT 1 FROM schema_migrations "
+            "WHERE name = 'backfill_history_ads_detected_v2_postreviewer_cuts'"
+        ).fetchone()
+        if gate is not None:
+            return
+
+        # Predicates intentionally use raw columns (no COALESCE): NULL
+        # comparisons evaluate to NULL (falsy in WHERE), so legacy rows
+        # with NULL ads_removed/firstpass/secondpass are excluded.
+        # COALESCE-to-0 would match and overwrite ads_detected with 0.
+        rows = conn.execute("""
+            WITH ranked AS (
+                SELECT h.id AS history_id,
+                       h.podcast_id,
+                       h.episode_id,
+                       h.ads_detected AS old_ads_detected,
+                       e.ads_removed AS true_total,
+                       e.ads_removed_firstpass,
+                       e.ads_removed_secondpass,
+                       (e.ads_removed - e.ads_removed_secondpass) AS pass1_cuts,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY h.podcast_id, h.episode_id
+                           ORDER BY h.processed_at DESC, h.id DESC
+                       ) AS rn
+                FROM processing_history h
+                JOIN episodes e
+                  ON e.podcast_id = h.podcast_id
+                 AND e.episode_id = h.episode_id
+                WHERE h.status = 'completed'
+            )
+            SELECT history_id, podcast_id, episode_id,
+                   old_ads_detected, true_total,
+                   ads_removed_firstpass, ads_removed_secondpass, pass1_cuts
+            FROM ranked
+            WHERE rn = 1
+              AND ads_removed_secondpass > 0
+              AND old_ads_detected = pass1_cuts
+              AND old_ads_detected != true_total
+        """).fetchall()
+
+        updated = 0
+        for row in rows:
+            conn.execute(
+                "UPDATE processing_history SET ads_detected = ? WHERE id = ?",
+                (row['true_total'], row['history_id']),
+            )
+            updated += 1
+            logger.info(
+                f"history-backfill-v2: podcast_id={row['podcast_id']} "
+                f"episode_id={row['episode_id']} "
+                f"ads_detected {row['old_ads_detected']} -> {row['true_total']} "
+                f"(pass1_cuts={row['pass1_cuts']} = "
+                f"total {row['true_total']} - secondpass {row['ads_removed_secondpass']}; "
+                f"firstpass_detection={row['ads_removed_firstpass']})"
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES "
+            "('backfill_history_ads_detected_v2_postreviewer_cuts')"
+        )
+        conn.commit()
+        logger.info(f"history-backfill-v2: complete, {updated} row(s) corrected")
+
+    def _run_env_backed_settings_migration(self, conn):
+        """One-shot corrective pass + per-boot resync for env-backed settings.
+
+        Three steps, in order:
+
+        1. Audit log every registered key's current state at INFO so any
+           deployer has a recoverable trail without per-key custom queries.
+        2. If the ``env_backed_settings_correct_flags`` migration row is
+           absent, run the corrective pass once: for each registered key
+           where the row exists, ``is_default=1`` and the stored value
+           differs from the validated env value, flip ``is_default`` to 0
+           and KEEP the stored value. The migration never writes value
+           during this pass, so no data is lost on any deployer's DB.
+        3. Per-boot resync: for each registered key, if the row is missing
+           insert it from env with ``is_default=1``; if the row exists and
+           ``is_default=1`` and value differs from env, update the value
+           (env changed since last boot, treat as canonical default).
+
+        ``schema_migrations`` is created at the top of
+        ``_run_schema_migrations`` before this helper runs.
+        """
+        from config import ENV_BACKED_SETTINGS, resolve_env_backed_default
+
+        # Step 1: audit log.
+        for db_key, _env_var, _fallback, _validator in ENV_BACKED_SETTINGS:
+            env_value = resolve_env_backed_default(db_key)
+            row = conn.execute(
+                "SELECT value, is_default FROM settings WHERE key = ?",
+                (db_key,),
+            ).fetchone()
+            if row is None:
+                logger.info(
+                    "env-backed-settings audit: key=%s row=absent env=%s",
+                    db_key, env_value,
+                )
+            else:
+                value = row['value'] if isinstance(row, sqlite3.Row) else row[0]
+                is_default = row['is_default'] if isinstance(row, sqlite3.Row) else row[1]
+                match = (value == env_value)
+                logger.info(
+                    "env-backed-settings audit: key=%s value=%s is_default=%s env=%s match=%s",
+                    db_key, value, is_default, env_value, match,
+                )
+
+        # Step 2: one-shot corrective flag pass, gated.
+        gate = conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = 'env_backed_settings_correct_flags'"
+        ).fetchone()
+        if gate is None:
+            for db_key, _env_var, _fallback, _validator in ENV_BACKED_SETTINGS:
+                env_value = resolve_env_backed_default(db_key)
+                row = conn.execute(
+                    "SELECT value, is_default FROM settings WHERE key = ?",
+                    (db_key,),
+                ).fetchone()
+                if row is None:
+                    continue
+                value = row['value'] if isinstance(row, sqlite3.Row) else row[0]
+                is_default = row['is_default'] if isinstance(row, sqlite3.Row) else row[1]
+                if is_default and value != env_value:
+                    conn.execute(
+                        "UPDATE settings SET is_default = 0 WHERE key = ?",
+                        (db_key,),
+                    )
+                    logger.info(
+                        "env-backed-settings corrective: key=%s value=%s flagged is_default=0 (was 1, env=%s)",
+                        db_key, value, env_value,
+                    )
+            conn.execute(
+                "INSERT INTO schema_migrations (name) VALUES ('env_backed_settings_correct_flags')"
+            )
+
+        # Step 3: per-boot resync (also inserts missing rows for new keys).
+        for db_key, _env_var, _fallback, _validator in ENV_BACKED_SETTINGS:
+            env_value = resolve_env_backed_default(db_key)
+            row = conn.execute(
+                "SELECT value, is_default FROM settings WHERE key = ?",
+                (db_key,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """INSERT INTO settings (key, value, is_default)
+                       VALUES (?, ?, 1)""",
+                    (db_key, env_value),
+                )
+                logger.info(
+                    "env-backed-settings seed: key=%s value=%s is_default=1",
+                    db_key, env_value,
+                )
+                continue
+            value = row['value'] if isinstance(row, sqlite3.Row) else row[0]
+            is_default = row['is_default'] if isinstance(row, sqlite3.Row) else row[1]
+            if is_default and value != env_value:
+                conn.execute(
+                    "UPDATE settings SET value = ? WHERE key = ?",
+                    (env_value, db_key),
+                )
+                logger.info(
+                    "env-backed-settings resync: key=%s %s -> %s (is_default=1)",
+                    db_key, value, env_value,
+                )
+
+        conn.commit()
 
     def _normalize_community_scope(self, conn):
         """Set scope='global' on every source=community pattern; clear
@@ -1123,15 +1664,23 @@ class SchemaMixin:
             logger.info(f"Re-encoded intro/outro_variants on {repaired} ad_patterns rows")
 
     def _reseed_known_sponsors(self, conn):
-        """Apply the authoritative sponsor seed list (src/seed_data/sponsors_final.csv).
+        """One-shot v2.4.0 seed of the known_sponsors table from
+        `src/seed_data/validator_known_sponsors.csv`.
 
-        UPDATE on name match (case-insensitive) to preserve `id` for any
-        existing ad_patterns.sponsor_id foreign keys. INSERT new rows.
-        Soft-delete (is_active=0) any existing sponsor whose name is not in
-        the CSV. Idempotent: re-running yields the same end state.
+        Runs on first boot at this revision: UPDATE on name match
+        (case-insensitive) to preserve `id` for any existing
+        ad_patterns.sponsor_id foreign keys, INSERT new rows,
+        soft-delete (is_active=0) any sponsor not in the CSV. The
+        `sponsor_seed_revision` setting is stamped on success so the
+        migration is a no-op on every subsequent boot at the same
+        revision.
 
-        Stamps a settings flag (`sponsor_seed_revision`) on success so we
-        only do meaningful work once per app version that ships a new seed.
+        The CSV is no longer the source of truth for the in-app
+        classifier -- after this migration runs, the live
+        known_sponsors table is. Edits to the CSV reach only the PR
+        validator's multi-sponsor check; see `sponsor_seed()`. Bump
+        SEED_REVISION below only if you intentionally want the
+        seed-from-CSV step to replay against existing installs.
         """
         from utils.community_tags import sponsor_seed
 
@@ -1233,6 +1782,228 @@ class SchemaMixin:
                 )
         except Exception as e:
             logger.warning(f"Migration: Zyn cascade cleanup failed: {e}")
+
+    def _cleanup_low_mention_patterns(self, conn):
+        """Retire ad_patterns that are structurally false-positive-shaped.
+
+        Two retirement criteria, both conservative:
+
+        1. **Low-mention auto-created, never-matched**:
+           sponsor in any variant appears <2 times in text_template
+           AND created_by == 'auto'
+           AND confirmation_count == 0
+           AND false_positive_count == 0
+           This is the Pattern #354 shape - a verification miss the LLM
+           shouldn't have flagged. Patterns that have matched real ads
+           (`confirmation_count > 0`) are left alone even if they also
+           sit in the low-mention bucket, because we cannot tell the
+           difference between a legitimate brand-once-mentioned ad and a
+           bad pattern that boosted its own conf via the
+           record_verification_misses "boost" path.
+
+        2. **Structurally broken sponsor field**:
+           - sponsor starts with a SPONSOR_REASONING_PREFIXES entry
+             (e.g. "Inferred from ..." stored as the sponsor name); OR
+           - sponsor ends with a known LLM-suffix tell (" brand",
+             " pre-roll", " sponsor ad", " sponsor ad with URL", etc.); OR
+           - sponsor stripped of whitespace differs from any
+             known_sponsors row AND no variant appears in template
+             (the "statefarm"-without-spaces shape).
+
+        Reversible per row (`is_active=1` re-enables). Idempotent via
+        the `low_mention_cleanup_revision` settings flag.
+        """
+        CLEANUP_REVISION = '2.5.13'
+        try:
+            current = conn.execute(
+                "SELECT value FROM settings "
+                "WHERE key = 'low_mention_cleanup_revision'"
+            ).fetchone()
+            if current and current['value'] == CLEANUP_REVISION:
+                return
+        except Exception:
+            pass
+
+        try:
+            from community_export import count_brand_occurrences
+            from utils.constants import is_sponsor_reasoning_rationale
+            SPONSOR_SUFFIX_TELLS = (
+                ' brand',
+                ' pre-roll',
+                ' sponsor ad',
+                ' sponsor ad with url',
+                ' advertisement',
+            )
+
+            rows = conn.execute(
+                "SELECT p.id, p.text_template, p.confirmation_count, "
+                "p.false_positive_count, p.created_by, "
+                "s.name, s.aliases "
+                "FROM ad_patterns p "
+                "JOIN known_sponsors s ON s.id = p.sponsor_id "
+                "WHERE p.is_active = 1 "
+                "AND p.text_template IS NOT NULL "
+                "AND p.text_template != '' "
+                "AND s.name IS NOT NULL"
+            ).fetchall()
+
+            # Build a set of canonical sponsor names (lowercased, with and
+            # without whitespace) so the structural "whitespace-stripped
+            # sponsor that no longer matches anything" rule can decide.
+            known_canonicals = set()
+            for s in conn.execute(
+                "SELECT name FROM known_sponsors WHERE is_active = 1"
+            ).fetchall():
+                n = (s[0] or '').lower().strip()
+                if not n:
+                    continue
+                known_canonicals.add(n)
+                known_canonicals.add(n.replace(' ', ''))
+
+            disabled = []
+            for pid, text_template, conf_count, fp_count, created_by, sponsor_name, aliases in rows:
+                sponsor_row = {'name': sponsor_name, 'aliases': aliases}
+                occ = count_brand_occurrences(text_template, sponsor_row)
+                sp_lower = (sponsor_name or '').lower().strip()
+
+                reasons = []
+
+                # Criterion 1: low-mention auto-created never-matched
+                if (
+                    occ < 2
+                    and (created_by or '').lower() == 'auto'
+                    and (conf_count or 0) == 0
+                    and (fp_count or 0) == 0
+                ):
+                    reasons.append(
+                        f"sponsor '{sponsor_name}' appears {occ}x in template, "
+                        f"auto-created, never matched"
+                    )
+
+                # Criterion 2a: sponsor field looks like a reasoning sentence
+                if is_sponsor_reasoning_rationale(sponsor_name):
+                    reasons.append(
+                        f"sponsor field looks like an LLM rationale: "
+                        f"{sponsor_name[:60]!r}"
+                    )
+
+                # Criterion 2b: sponsor field has a known LLM suffix tell
+                if any(sp_lower.endswith(suffix) for suffix in SPONSOR_SUFFIX_TELLS):
+                    reasons.append(
+                        f"sponsor field has an LLM-suffix tell: "
+                        f"{sponsor_name!r}"
+                    )
+
+                # Criterion 2c: whitespace-stripped sponsor doesn't match any
+                # known_sponsors row AND no variant appears in template
+                # (the 'statefarm' shape).
+                if (
+                    sp_lower not in known_canonicals
+                    and sp_lower.replace(' ', '') not in known_canonicals
+                    and occ == 0
+                ):
+                    reasons.append(
+                        f"sponsor '{sponsor_name}' is not canonical AND no "
+                        f"variant appears in template"
+                    )
+
+                if reasons:
+                    disabled.append((pid, sponsor_name, occ, '; '.join(reasons)))
+
+            for pid, sponsor_name, occ, reason in disabled:
+                conn.execute(
+                    "UPDATE ad_patterns SET is_active = 0, "
+                    "disabled_reason = ? WHERE id = ?",
+                    (
+                        f"2.5.13 cleanup: {reason}",
+                        pid,
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO settings (key, value, is_default) VALUES (?, ?, 0) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ('low_mention_cleanup_revision', CLEANUP_REVISION),
+            )
+            conn.commit()
+            if disabled:
+                logger.info(
+                    f"Migration: disabled {len(disabled)} ad_patterns "
+                    f"(low-mention auto-created or structurally broken sponsor)"
+                )
+        except Exception as e:
+            logger.warning(f"Migration: low-mention pattern cleanup failed: {e}")
+
+    def _cleanup_multi_sponsor_patterns(self, conn):
+        """Disable active ad_patterns whose text_template names two or more
+        sponsors outside the pattern's declared sponsor row.
+
+        A "kitchen-sink" template (e.g. naming a half-dozen unrelated brands
+        in one comma-separated list) generates high-weight TF-IDF tokens for
+        every brand and over-matches any episode that mentions a handful of
+        them. The 2.5.7 merge guard prevents new ones; this one-shot pass
+        retires the existing rows. Stamped via settings flag so a second
+        boot doesn't re-scan all patterns x all sponsors.
+        """
+        CLEANUP_REVISION = '2.5.7'
+        try:
+            current = conn.execute(
+                "SELECT value FROM settings "
+                "WHERE key = 'multi_sponsor_cleanup_revision'"
+            ).fetchone()
+            if current and current['value'] == CLEANUP_REVISION:
+                return
+        except Exception:
+            pass
+        try:
+            rows = conn.execute(
+                "SELECT id, name, aliases, is_active FROM known_sponsors "
+                "WHERE is_active = 1"
+            ).fetchall()
+            sponsors = [
+                {"id": r[0], "name": r[1], "aliases": r[2], "is_active": r[3]}
+                for r in rows
+            ]
+            sponsor_by_id = {s["id"]: s for s in sponsors}
+
+            patterns = conn.execute(
+                "SELECT id, text_template, sponsor_id FROM ad_patterns "
+                "WHERE is_active = 1 "
+                "AND text_template IS NOT NULL AND text_template != ''"
+            ).fetchall()
+
+            disabled = []
+            for pid, text_template, sponsor_id in patterns:
+                row = sponsor_by_id.get(sponsor_id) if sponsor_id else None
+                declared_lower = declared_sponsor_names_lower(row)
+                foreign = find_foreign_sponsors(
+                    text_template, declared_lower, sponsors, require_active=True
+                )
+                if len(foreign) >= 2:
+                    disabled.append((pid, foreign[:5]))
+
+            for pid, names in disabled:
+                conn.execute(
+                    "UPDATE ad_patterns SET is_active = 0, "
+                    "disabled_reason = ? WHERE id = ?",
+                    (
+                        f"Multi-sponsor garbage (2.5.7 cleanup): "
+                        f"foreign sponsors {names}",
+                        pid,
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO settings (key, value, is_default) VALUES (?, ?, 0) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ('multi_sponsor_cleanup_revision', CLEANUP_REVISION),
+            )
+            conn.commit()
+            if disabled:
+                logger.info(
+                    f"Migration: disabled {len(disabled)} multi-sponsor "
+                    f"ad_patterns (threshold: 2+ foreign brands)"
+                )
+        except Exception as e:
+            logger.warning(f"Migration: multi-sponsor pattern cleanup failed: {e}")
 
     def _migrate_ad_detection_max_tokens(self, conn):
         """Rename ad_detection_max_tokens -> detection_max_tokens.
@@ -1490,6 +2261,7 @@ class SchemaMixin:
             old_ap_cols = [
                 r['name'] for r in conn.execute("PRAGMA table_info(ad_patterns)").fetchall()
             ]
+            conn.execute("DROP TABLE IF EXISTS ad_patterns_new")
             conn.execute("""
                 CREATE TABLE ad_patterns_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1533,6 +2305,7 @@ class SchemaMixin:
             old_pc_cols = [
                 r['name'] for r in conn.execute("PRAGMA table_info(pattern_corrections)").fetchall()
             ]
+            conn.execute("DROP TABLE IF EXISTS pattern_corrections_new")
             conn.execute("""
                 CREATE TABLE pattern_corrections_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -14,8 +14,28 @@ export interface Feed {
   daiPlatform?: string;
   networkIdOverride?: string | null;
   autoProcessOverride?: boolean | null;
+  languageOverride?: string | null;
+  titleOverride?: string | null;
   maxEpisodes?: number | null;
   onlyExposeProcessedEpisodes?: boolean | null;
+}
+
+export interface AdDistributionZone {
+  center: number;  // normalized 0-1
+  low: number;
+  high: number;
+  support: number;  // distinct episodes
+  boost: number;
+}
+
+export interface AdDistribution {
+  slug: string;
+  episodesConsidered: number;
+  medianDurationSeconds: number;
+  bucketCount: number;
+  buckets: number[];  // cut-start counts per normalized-position bin
+  totalEvents: number;
+  zones: AdDistributionZone[];
 }
 
 export interface Episode {
@@ -143,6 +163,15 @@ export interface Settings {
   combinedFeedEpisodeLimit: SettingValueNumber;
   onlyExposeProcessedDefault: SettingValueBoolean;
   audioBitrate: SettingValue;
+  skipFlacCompression: SettingValueBoolean;
+  adDetectionParallelWindows: SettingValueNumber;
+  adReviewerParallelAds: SettingValueNumber;
+  audioCueDetectionEnabled: SettingValueBoolean;
+  audioCueFreqMinHz: SettingValueNumber;
+  audioCueFreqMaxHz: SettingValueNumber;
+  audioCueProminenceDb: SettingValueNumber;
+  audioCueMinConfidence: SettingValueNumber;
+  positionalPriorEnabled: SettingValueBoolean;
   vttTranscriptsEnabled: SettingValueBoolean;
   chaptersEnabled: SettingValueBoolean;
   chaptersModel: SettingValue;
@@ -197,6 +226,16 @@ export interface Settings {
     transcribeChunkOverlapSeconds: number;
     audioNormalizeEnabled: boolean;
     audioNormalizeIntensity: string;
+    audioBitrate: string;
+    skipFlacCompression: boolean;
+    adDetectionParallelWindows: number;
+    adReviewerParallelAds: number;
+    audioCueDetectionEnabled: boolean;
+    audioCueFreqMinHz: number;
+    audioCueFreqMaxHz: number;
+    audioCueProminenceDb: number;
+    audioCueMinConfidence: number;
+    positionalPriorEnabled: boolean;
   };
 }
 
@@ -216,6 +255,15 @@ export interface UpdateSettingsPayload {
   combinedFeedEpisodeLimit?: number;
   onlyExposeProcessedDefault?: boolean;
   audioBitrate?: string;
+  skipFlacCompression?: boolean;
+  adDetectionParallelWindows?: number;
+  adReviewerParallelAds?: number;
+  audioCueDetectionEnabled?: boolean;
+  audioCueFreqMinHz?: number;
+  audioCueFreqMaxHz?: number;
+  audioCueProminenceDb?: number;
+  audioCueMinConfidence?: number;
+  positionalPriorEnabled?: boolean;
   vttTranscriptsEnabled?: boolean;
   chaptersEnabled?: boolean;
   chaptersModel?: string;
@@ -367,16 +415,21 @@ export interface Sponsor {
   name: string;
   aliases: string[];
   category: string | null;
+  common_ctas: string[];
+  tags: string[];
   is_active: boolean;
+  pattern_count: number;
+  last_matched_at: string | null;
   created_at: string;
 }
 
+export type NormalizationCategory = 'sponsor' | 'url' | 'number' | 'phrase';
+
 export interface SponsorNormalization {
   id: number;
-  pattern: string;
-  replacement: string;
-  is_regex: boolean;
-  priority: number;
+  terms: string;
+  canonical: string;
+  category: NormalizationCategory;
   is_active: boolean;
   created_at: string;
 }
@@ -416,6 +469,7 @@ export interface BulkActionResult {
 
 export interface RetentionSettings {
   retentionDays: number;
+  originalRetentionDays: number;
   enabled: boolean;
 }
 
@@ -468,6 +522,11 @@ export interface DashboardStats {
   totalLlmCost: number;
   avgInputTokens: number;
   avgOutputTokens: number;
+  // Audio cue detection experiment (#350); zero unless the experiment is enabled.
+  avgAudioCuesDetected: number;
+  minAudioCuesDetected: number;
+  maxAudioCuesDetected: number;
+  totalAudioCuesDetected: number;
 }
 
 export interface DayStats {

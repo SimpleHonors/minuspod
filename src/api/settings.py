@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import re
 import threading
 import uuid
 from dataclasses import dataclass
@@ -17,14 +16,25 @@ from api import (
 from config import (
     WHISPER_BACKEND_LOCAL, WHISPER_BACKEND_API,
     WHISPER_COMPUTE_TYPES, WHISPER_COMPUTE_TYPE_DEFAULT,
-    OPENROUTER_BASE_URL,
+    DEFAULT_OPENAI_BASE_URL, OPENROUTER_BASE_URL, OPENROUTER_ROUTER_ALIASES,
     PROVIDER_ANTHROPIC, PROVIDER_OPENROUTER, PROVIDER_OPENAI_COMPATIBLE, PROVIDER_OLLAMA,
+    resolve_env_backed_default,
+    ALLOWED_AUDIO_BITRATES, DEFAULT_AUDIO_BITRATE,
+    AD_DETECTION_PARALLEL_WINDOWS_DEFAULT,
+    AD_DETECTION_PARALLEL_WINDOWS_MIN,
+    AD_DETECTION_PARALLEL_WINDOWS_MAX,
+    AD_REVIEWER_PARALLEL_ADS_DEFAULT,
+    AD_REVIEWER_PARALLEL_ADS_MIN,
+    AD_REVIEWER_PARALLEL_ADS_MAX,
+    coerce_bool_setting,
+    STAGE_TUNABLE_PAYLOAD_KEYS,
 )
 from pricing_fetcher import force_refresh_pricing
 from llm_client import (
     get_effective_provider, get_effective_base_url, get_api_key, get_effective_openrouter_api_key,
     get_llm_client, create_client_for_provider, _JSON_FORMAT_SETTING_KEY,
 )
+from utils.language import LANGUAGE_CODE_RE
 from utils.url import validate_base_url, SSRFError
 from utils.http import safe_url_for_log
 from utils.secret_writes import SecretWriteRejected, set_or_clear_secret
@@ -101,6 +111,10 @@ def get_settings():
     )
     from ad_detector import AdDetector
     from config import DEFAULT_AD_DETECTION_MODEL as DEFAULT_MODEL
+    from config import (
+        AUDIO_CUE_FREQ_MIN_HZ, AUDIO_CUE_FREQ_MAX_HZ,
+        AUDIO_CUE_PROMINENCE_DB, AUDIO_CUE_MIN_CONFIDENCE,
+    )
     from chapters_generator import CHAPTERS_MODEL
     settings = _settings_view(db.get_all_settings())
 
@@ -210,6 +224,37 @@ def get_settings():
     audio_normalize_enabled = str(audio_normalize_enabled_raw).lower() in ('true', '1', 'yes')
     audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'aggressive')
 
+    audio_bitrate = _setting_value(settings, 'audio_bitrate', DEFAULT_AUDIO_BITRATE)
+    default_skip_flac = os.environ.get('SKIP_FLAC_COMPRESSION', 'false')
+    skip_flac_raw = _setting_value(settings, 'skip_flac_compression', default_skip_flac)
+    skip_flac = coerce_bool_setting(skip_flac_raw)
+
+    default_parallel_windows = str(AD_DETECTION_PARALLEL_WINDOWS_DEFAULT)
+    parallel_windows_raw = _setting_value(
+        settings, 'ad_detection_parallel_windows', default_parallel_windows
+    )
+    try:
+        parallel_windows = int(parallel_windows_raw)
+    except (ValueError, TypeError):
+        parallel_windows = AD_DETECTION_PARALLEL_WINDOWS_DEFAULT
+    parallel_windows = max(
+        AD_DETECTION_PARALLEL_WINDOWS_MIN,
+        min(AD_DETECTION_PARALLEL_WINDOWS_MAX, parallel_windows),
+    )
+
+    default_reviewer_parallel = str(AD_REVIEWER_PARALLEL_ADS_DEFAULT)
+    reviewer_parallel_raw = _setting_value(
+        settings, 'ad_reviewer_parallel_ads', default_reviewer_parallel
+    )
+    try:
+        reviewer_parallel = int(reviewer_parallel_raw)
+    except (ValueError, TypeError):
+        reviewer_parallel = AD_REVIEWER_PARALLEL_ADS_DEFAULT
+    reviewer_parallel = max(
+        AD_REVIEWER_PARALLEL_ADS_MIN,
+        min(AD_REVIEWER_PARALLEL_ADS_MAX, reviewer_parallel),
+    )
+
     # Per-stage LLM tunables: resolved value (env > DB > default) and env-override status.
     from config import (
         get_stage_tunable, stage_tunable_env_override,
@@ -258,12 +303,35 @@ def get_settings():
         review_max_boundary_shift = int(_setting_value(settings, 'review_max_boundary_shift', '60'))
     except (ValueError, TypeError):
         review_max_boundary_shift = 60
-    review_prompt = _setting_value(settings, 'review_prompt', DEFAULT_REVIEW_PROMPT)
-    resurrect_prompt = _setting_value(settings, 'resurrect_prompt', DEFAULT_RESURRECT_PROMPT)
+    # `or DEFAULT` (not just the _setting_value fallback) so a stored empty/whitespace
+    # row also yields the default text -- _setting_value only covers a missing row, so a
+    # blank one would render an unrecoverable empty textarea. All four prompts share this
+    # contract, hence the same coalesce on system/verification below.
+    review_prompt = _setting_value(settings, 'review_prompt', DEFAULT_REVIEW_PROMPT) or DEFAULT_REVIEW_PROMPT
+    resurrect_prompt = _setting_value(settings, 'resurrect_prompt', DEFAULT_RESURRECT_PROMPT) or DEFAULT_RESURRECT_PROMPT
+
+    # Audio cue detection experiment (#350)
+    audio_cue_enabled = str(
+        _setting_value(settings, 'audio_cue_detection_enabled', 'false')).strip().lower() == 'true'
+
+    # Learned positional prior experiment (#360)
+    positional_prior_enabled = coerce_bool_setting(
+        _setting_value(settings, 'positional_prior_enabled', 'false'))
+
+    def _cue_num(key, default):
+        try:
+            return float(_setting_value(settings, key, str(default)))
+        except (ValueError, TypeError):
+            return float(default)
+
+    audio_cue_freq_min = int(_cue_num('audio_cue_freq_min_hz', AUDIO_CUE_FREQ_MIN_HZ))
+    audio_cue_freq_max = int(_cue_num('audio_cue_freq_max_hz', AUDIO_CUE_FREQ_MAX_HZ))
+    audio_cue_prominence = _cue_num('audio_cue_prominence_db', AUDIO_CUE_PROMINENCE_DB)
+    audio_cue_min_conf = _cue_num('audio_cue_min_confidence', AUDIO_CUE_MIN_CONFIDENCE)
 
     return json_response({
-        'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT)),
-        'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT)),
+        'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT),
+        'verificationPrompt': _sv('verification_prompt', _setting_value(settings, 'verification_prompt', DEFAULT_VERIFICATION_PROMPT) or DEFAULT_VERIFICATION_PROMPT),
         'enableAdReview': _sv('enable_ad_review', enable_ad_review),
         'reviewModel': _sv('review_model', review_model),
         'reviewMaxBoundaryShift': _sv('review_max_boundary_shift', review_max_boundary_shift),
@@ -301,6 +369,16 @@ def get_settings():
         'transcribeChunkOverlapSeconds': _sv('transcribe_chunk_overlap_seconds', transcribe_chunk_overlap_seconds),
         'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
         'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
+        'audioCueDetectionEnabled': _sv('audio_cue_detection_enabled', audio_cue_enabled),
+        'audioCueFreqMinHz': _sv('audio_cue_freq_min_hz', audio_cue_freq_min),
+        'audioCueFreqMaxHz': _sv('audio_cue_freq_max_hz', audio_cue_freq_max),
+        'audioCueProminenceDb': _sv('audio_cue_prominence_db', audio_cue_prominence),
+        'audioCueMinConfidence': _sv('audio_cue_min_confidence', audio_cue_min_conf),
+        'positionalPriorEnabled': _sv('positional_prior_enabled', positional_prior_enabled),
+        'audioBitrate': _sv('audio_bitrate', audio_bitrate),
+        'skipFlacCompression': _sv('skip_flac_compression', skip_flac),
+        'adDetectionParallelWindows': _sv('ad_detection_parallel_windows', parallel_windows),
+        'adReviewerParallelAds': _sv('ad_reviewer_parallel_ads', reviewer_parallel),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
         'stageTunables': tunables_payload,
@@ -327,8 +405,8 @@ def get_settings():
             'chaptersEnabled': True,
             'chaptersModel': CHAPTERS_MODEL,
             'minCutConfidence': 0.80,
-            'llmProvider': os.environ.get('LLM_PROVIDER', PROVIDER_ANTHROPIC),
-            'openaiBaseUrl': os.environ.get('OPENAI_BASE_URL', 'http://localhost:8000/v1'),
+            'llmProvider': resolve_env_backed_default('llm_provider'),
+            'openaiBaseUrl': os.environ.get('OPENAI_BASE_URL', DEFAULT_OPENAI_BASE_URL),
             'openrouterBaseUrl': OPENROUTER_BASE_URL,
             'whisperBackend': default_whisper_backend,
             'whisperApiBaseUrl': default_whisper_api_base_url,
@@ -344,6 +422,16 @@ def get_settings():
             'transcribeChunkOverlapSeconds': 30,
             'audioNormalizeEnabled': False,
             'audioNormalizeIntensity': 'aggressive',
+            'audioCueDetectionEnabled': False,
+            'positionalPriorEnabled': False,
+            'audioCueFreqMinHz': int(AUDIO_CUE_FREQ_MIN_HZ),
+            'audioCueFreqMaxHz': int(AUDIO_CUE_FREQ_MAX_HZ),
+            'audioCueProminenceDb': AUDIO_CUE_PROMINENCE_DB,
+            'audioCueMinConfidence': AUDIO_CUE_MIN_CONFIDENCE,
+            'audioBitrate': DEFAULT_AUDIO_BITRATE,
+            'skipFlacCompression': coerce_bool_setting(os.environ.get('SKIP_FLAC_COMPRESSION', 'false')),
+            'adDetectionParallelWindows': AD_DETECTION_PARALLEL_WINDOWS_DEFAULT,
+            'adReviewerParallelAds': AD_REVIEWER_PARALLEL_ADS_DEFAULT,
         }
     })
 
@@ -395,10 +483,13 @@ def update_ad_detection_settings():
         _apply_processing_flags,
         _apply_min_cut_confidence,
         _apply_audio_normalize_fields,
+        _apply_audio_fields,
         _apply_provider_fields,
         _apply_whisper_fields,
         _apply_vad_gap_fields,
         _apply_transcribe_chunk_fields,
+        _apply_audio_cue_fields,
+        _apply_positional_prior_fields,
         _apply_podcast_index_fields,
         _apply_stage_tunables,
     )
@@ -411,7 +502,12 @@ def update_ad_detection_settings():
 
 
 def _apply_prompt_fields(db, data):
-    """Persist the four prompt strings (no coercion, no validation)."""
+    """Persist the four prompt strings.
+
+    An empty/whitespace prompt is never valid (the runtime falls back to the
+    default), so clearing a field and saving resets it to default rather than
+    storing a blank row that would render as an unrecoverable empty textarea.
+    """
     for payload_key, db_key, log_label in (
         ('systemPrompt', 'system_prompt', 'system prompt'),
         ('verificationPrompt', 'verification_prompt', 'verification prompt'),
@@ -419,8 +515,12 @@ def _apply_prompt_fields(db, data):
         ('resurrectPrompt', 'resurrect_prompt', 'resurrect prompt'),
     ):
         if payload_key in data:
-            db.set_setting(db_key, data[payload_key], is_default=False)
-            logger.info(f"Updated {log_label}")
+            if not str(data[payload_key] or '').strip():
+                db.reset_setting(db_key)
+                logger.info(f"Reset {log_label} to default (blank submitted)")
+            else:
+                db.set_setting(db_key, data[payload_key], is_default=False)
+                logger.info(f"Updated {log_label}")
     return None
 
 
@@ -544,11 +644,67 @@ def _apply_audio_normalize_fields(db, data):
     return None
 
 
+def _apply_audio_fields(db, data):
+    """Persist the audio output bitrate, restricted to the allowed encode set."""
+    if 'audioBitrate' in data:
+        val = str(data['audioBitrate']).strip()
+        if val not in ALLOWED_AUDIO_BITRATES:
+            return json_response(
+                {'error': f'audioBitrate must be one of: {", ".join(ALLOWED_AUDIO_BITRATES)}'}, 400
+            )
+        db.set_setting('audio_bitrate', val, is_default=False)
+        logger.info(f"Updated audio bitrate to: {val}")
+
+    if 'adDetectionParallelWindows' in data:
+        try:
+            n = int(data['adDetectionParallelWindows'])
+        except (ValueError, TypeError):
+            return json_response(
+                {'error': 'adDetectionParallelWindows must be an integer'}, 400
+            )
+        if not (AD_DETECTION_PARALLEL_WINDOWS_MIN <= n <= AD_DETECTION_PARALLEL_WINDOWS_MAX):
+            return json_response(
+                {
+                    'error': (
+                        f'adDetectionParallelWindows must be between '
+                        f'{AD_DETECTION_PARALLEL_WINDOWS_MIN} and '
+                        f'{AD_DETECTION_PARALLEL_WINDOWS_MAX}'
+                    )
+                },
+                400,
+            )
+        db.set_setting('ad_detection_parallel_windows', str(n), is_default=False)
+        logger.info(f"Updated ad_detection_parallel_windows to: {n}")
+
+    if 'adReviewerParallelAds' in data:
+        try:
+            n = int(data['adReviewerParallelAds'])
+        except (ValueError, TypeError):
+            return json_response(
+                {'error': 'adReviewerParallelAds must be an integer'}, 400
+            )
+        if not (AD_REVIEWER_PARALLEL_ADS_MIN <= n <= AD_REVIEWER_PARALLEL_ADS_MAX):
+            return json_response(
+                {
+                    'error': (
+                        f'adReviewerParallelAds must be between '
+                        f'{AD_REVIEWER_PARALLEL_ADS_MIN} and '
+                        f'{AD_REVIEWER_PARALLEL_ADS_MAX}'
+                    )
+                },
+                400,
+            )
+        db.set_setting('ad_reviewer_parallel_ads', str(n), is_default=False)
+        logger.info(f"Updated ad_reviewer_parallel_ads to: {n}")
+    return None
+
+
 def _apply_provider_fields(db, data):
     """Persist LLM provider + base URL + key, then run post-change side effects.
 
     On any provider-affecting change: clear cached json_format probe, force a
     fresh client, probe again, refresh pricing in a background thread, and
+    (only when the new provider's catalog probe returns a non-empty list)
     prune any saved model ID that the new provider does not advertise.
     """
     provider_changed = False
@@ -593,12 +749,24 @@ def _apply_provider_fields(db, data):
             client.probe_json_format_support()
         threading.Thread(target=force_refresh_pricing, daemon=True).start()
 
-        # Prune saved model IDs that the new provider does not advertise.
-        # Otherwise selections from a prior catalog (e.g. OpenRouter-style
-        # tags carrying into Ollama Cloud) survive the switch and fail at
-        # request time with not_found_error. Reset to provider-aware defaults.
+        # Prune saved model IDs that the new provider does not advertise so
+        # selections from a prior catalog (e.g. OpenRouter-style tags
+        # carrying into Ollama Cloud) do not survive the switch and fail at
+        # request time with not_found_error.
+        #
+        # The SDKs swallow auth 401, network 5xx, and unreachable-host
+        # errors and return []. Treating an empty list as "every prior
+        # model is invalid" wiped claude_model, verification_model, and
+        # chapters_model on any provider save with a misconfigured key.
         try:
             advertised = {m.id for m in client.list_models()}
+        except ValueError as e:
+            logger.info("Provider catalog unavailable after switch: %s", e)
+            advertised = set()
+        except Exception:
+            logger.exception("Failed to fetch model catalog after provider change")
+            advertised = set()
+        if advertised:
             for setting_key in ('claude_model', 'verification_model', 'chapters_model'):
                 current = db.get_setting(setting_key)
                 if current and current not in advertised:
@@ -607,8 +775,11 @@ def _apply_provider_fields(db, data):
                         setting_key, current,
                     )
                     db.reset_setting(setting_key)
-        except Exception:
-            logger.exception("Failed to prune stale model selections after provider change")
+        else:
+            logger.warning(
+                "Skipping model prune after provider change: new provider's "
+                "catalog probe returned empty (likely auth or network failure)"
+            )
     # The TTL cache backing get_effective_base_url / get_effective_provider
     # lags writes by up to 5s. Without this invalidation, the GET /settings
     # response that fires right after this PUT returns the pre-write value,
@@ -656,9 +827,9 @@ def _apply_whisper_fields(db, data):
     if 'whisperLanguage' in data:
         lang_val = str(data['whisperLanguage']).strip().lower()
         # Empty string collapses to default ('en'); 'auto' is allowed; otherwise
-        # require a plausible ISO-639-1 code shape (2-5 alphanum/hyphen chars).
-        if lang_val and lang_val != 'auto' and not re.match(r'^[a-z]{2,3}(-[a-z0-9]{2,4})?$', lang_val):
-            return json_response({'error': "whisperLanguage must be 'auto' or a valid language code (e.g. 'en', 'fi', 'pt-br')"}, 400)
+        # require a bare 2-3 letter language code (faster-whisper rejects subtags).
+        if lang_val and lang_val != 'auto' and not LANGUAGE_CODE_RE.match(lang_val):
+            return json_response({'error': "whisperLanguage must be 'auto' or a 2-3 letter language code (e.g. 'en', 'fi', 'pt')"}, 400)
         db.set_setting('whisper_language', lang_val or 'en', is_default=False)
         logger.info(f"Updated whisper language to: {lang_val or 'en'}")
 
@@ -676,6 +847,11 @@ def _apply_whisper_fields(db, data):
         except Exception:
             logger.exception("Failed to mark Whisper model for reload after compute_type change")
         logger.info(f"Updated whisper compute type to: {ct_val}")
+
+    if 'skipFlacCompression' in data:
+        enabled = coerce_bool_setting(data['skipFlacCompression'])
+        db.set_setting('skip_flac_compression', 'true' if enabled else 'false', is_default=False)
+        logger.info(f"Updated skip_flac_compression to: {enabled}")
     return None
 
 
@@ -727,6 +903,64 @@ def _apply_transcribe_chunk_fields(db, data):
             )
         db.set_setting(db_key, str(value), is_default=False)
         logger.info(f"Updated {db_key} to: {value}")
+    return None
+
+
+def _apply_audio_cue_fields(db, data):
+    """Persist the audio-cue detection experiment (#350): toggle + tuneables.
+
+    Validates every field (ranges and freq min < max) BEFORE writing anything,
+    so an invalid field cannot leave a half-applied set.
+    """
+    from config import AUDIO_CUE_FREQ_MIN_HZ, AUDIO_CUE_FREQ_MAX_HZ
+
+    writes = []  # (db_key, str_value) applied only after all validation passes
+
+    if 'audioCueDetectionEnabled' in data:
+        raw = data['audioCueDetectionEnabled']
+        enabled = raw if isinstance(raw, bool) else str(raw).strip().lower() in ('true', '1', 'yes')
+        writes.append(('audio_cue_detection_enabled', 'true' if enabled else 'false'))
+
+    parsed = {}
+    for field_name, db_key, lo, hi in (
+        ('audioCueFreqMinHz', 'audio_cue_freq_min_hz', 20.0, 20000.0),
+        ('audioCueFreqMaxHz', 'audio_cue_freq_max_hz', 20.0, 20000.0),
+        ('audioCueProminenceDb', 'audio_cue_prominence_db', 1.0, 40.0),
+        ('audioCueMinConfidence', 'audio_cue_min_confidence', 0.0, 1.0),
+    ):
+        if field_name not in data:
+            continue
+        try:
+            value = float(data[field_name])
+        except (TypeError, ValueError):
+            return json_response({'error': f'{field_name} must be a number'}, 400)
+        if value < lo or value > hi:
+            return json_response({'error': f'{field_name} must be between {lo} and {hi}'}, 400)
+        parsed[field_name] = value
+        writes.append((db_key, str(value)))
+
+    if 'audioCueFreqMinHz' in parsed or 'audioCueFreqMaxHz' in parsed:
+        fmin = parsed.get('audioCueFreqMinHz')
+        if fmin is None:
+            fmin = float(db.get_setting('audio_cue_freq_min_hz') or AUDIO_CUE_FREQ_MIN_HZ)
+        fmax = parsed.get('audioCueFreqMaxHz')
+        if fmax is None:
+            fmax = float(db.get_setting('audio_cue_freq_max_hz') or AUDIO_CUE_FREQ_MAX_HZ)
+        if fmin >= fmax:
+            return json_response({'error': 'audioCueFreqMinHz must be below audioCueFreqMaxHz'}, 400)
+
+    for db_key, str_value in writes:
+        db.set_setting(db_key, str_value, is_default=False)
+        logger.info(f"Updated {db_key} to: {str_value}")
+    return None
+
+
+def _apply_positional_prior_fields(db, data):
+    """Persist the learned positional prior experiment toggle (#360)."""
+    if 'positionalPriorEnabled' in data:
+        enabled = coerce_bool_setting(data['positionalPriorEnabled'])
+        db.set_setting('positional_prior_enabled', 'true' if enabled else 'false', is_default=False)
+        logger.info(f"Updated positional_prior_enabled to: {enabled}")
     return None
 
 
@@ -885,6 +1119,9 @@ def reset_ad_detection_settings():
 
     db.reset_setting('min_cut_confidence')
     db.reset_setting('auto_process_enabled')
+    db.reset_setting('audio_bitrate')
+    db.reset_setting('ad_detection_parallel_windows')
+    db.reset_setting('ad_reviewer_parallel_ads')
 
     # Reset LLM provider settings back to env var defaults
     db.reset_setting('llm_provider')
@@ -898,12 +1135,19 @@ def reset_ad_detection_settings():
     db.reset_setting('whisper_api_key')
     db.reset_setting('whisper_api_model')
     db.reset_setting('whisper_compute_type')
+    db.reset_setting('skip_flac_compression')
     db.reset_setting('vad_gap_detection_enabled')
     db.reset_setting('vad_gap_start_min_seconds')
     db.reset_setting('vad_gap_mid_min_seconds')
     db.reset_setting('vad_gap_tail_min_seconds')
     db.reset_setting('audio_normalize_enabled')
     db.reset_setting('audio_normalize_intensity')
+
+    # Per-stage LLM tunables (temperature, max tokens, reasoning, Ollama context
+    # window, detection-window geometry). reset_setting clears each row so
+    # env > default resolution applies.
+    for _payload_key, db_key, _kind in STAGE_TUNABLE_PAYLOAD_KEYS:
+        db.reset_setting(db_key)
 
     # Recreate LLM client with reset settings
     client = get_llm_client(force_new=True)
@@ -934,6 +1178,20 @@ def reset_prompts_only():
 
     logger.info("Reset prompts to defaults")
     return json_response({'message': 'Prompts reset to defaults'})
+
+
+def _ensure_openrouter_aliases_present(models: list) -> None:
+    """Prepend OpenRouter router aliases (openrouter/free, openrouter/auto) that
+    aren't already in the list. These are valid model IDs but are not returned by
+    /api/v1/models, so they'd otherwise never appear in the dropdown.
+    """
+    existing_ids = {m.get('id') for m in models}
+    missing = [
+        {'id': alias_id, 'name': alias_name, 'created': None}
+        for alias_id, alias_name in OPENROUTER_ROUTER_ALIASES
+        if alias_id not in existing_ids
+    ]
+    models[:0] = missing
 
 
 @api.route('/settings/models', methods=['GET'])
@@ -978,6 +1236,10 @@ def get_available_models():
         ad_detector = AdDetector()
         models = ad_detector.get_available_models()
 
+    target_provider = provider_override or get_effective_provider()
+    if target_provider == PROVIDER_OPENROUTER:
+        _ensure_openrouter_aliases_present(models)
+
     _enrich_models_with_pricing(models)
     return json_response({'models': models})
 
@@ -996,6 +1258,8 @@ def refresh_models():
     get_llm_client(force_new=True)
     ad_detector = AdDetector()
     models = ad_detector.get_available_models()
+    if get_effective_provider() == PROVIDER_OPENROUTER:
+        _ensure_openrouter_aliases_present(models)
     _enrich_models_with_pricing(models)
 
     logger.info(f"Refreshed model list: {len(models)} models available")
@@ -1065,19 +1329,47 @@ def list_networks():
 @api.route('/settings/retention', methods=['GET'])
 @log_request
 def get_retention_settings():
-    """Get retention configuration."""
+    """Get retention configuration.
+
+    `originalRetentionDays` defaults to whatever `retentionDays` is when the
+    operator has never set it explicitly; that keeps the two values matched
+    by default and lets `retention_days` changes propagate without forcing
+    the operator to touch both fields.
+    """
     db = get_database()
     retention_days = int(db.get_setting('retention_days') or '30')
+    original_raw = db.get_setting('original_retention_days')
+    original_retention_days = (
+        int(original_raw) if original_raw else retention_days
+    )
     return json_response({
         'retentionDays': retention_days,
+        'originalRetentionDays': original_retention_days,
         'enabled': retention_days > 0,
     })
+
+
+def _clamp_original_retention(retention_days: int, original: int) -> int:
+    """Clamp `original` so an original cannot outlive its processed peer.
+
+    When retention is disabled (`retention_days == 0`), there is nothing
+    to clamp to; the operator's stored original value is kept as-is.
+    Otherwise the original is capped at `retention_days`.
+    """
+    if retention_days <= 0:
+        return original
+    return min(original, retention_days)
 
 
 @api.route('/settings/retention', methods=['PUT'])
 @log_request
 def update_retention_settings():
-    """Update retention configuration."""
+    """Update retention configuration.
+
+    Server-side clamp: `originalRetentionDays` is capped to `retentionDays`
+    because an original outliving its processed file would be orphaned the
+    moment the next cleanup pass resets the episode.
+    """
     data = request.get_json()
     if not data or 'retentionDays' not in data:
         return error_response('retentionDays is required', 400)
@@ -1090,8 +1382,24 @@ def update_retention_settings():
     db.set_setting('retention_days', str(days), is_default=False)
     logger.info(f"Updated retention_days to {days}")
 
+    # original_retention_days is optional; absent => match retention_days.
+    original_days = days  # response default
+    if 'originalRetentionDays' in data:
+        original = data['originalRetentionDays']
+        if not isinstance(original, int) or original < 1 or original > 3650:
+            return error_response(
+                'originalRetentionDays must be an integer between 1 and 3650', 400
+            )
+        # Clamp; never let original outlive processed.
+        original_days = _clamp_original_retention(days, original)
+        db.set_setting(
+            'original_retention_days', str(original_days), is_default=False
+        )
+        logger.info(f"Updated original_retention_days to {original_days}")
+
     return json_response({
         'retentionDays': days,
+        'originalRetentionDays': original_days,
         'enabled': days > 0,
     })
 
@@ -1403,12 +1711,28 @@ def test_webhook(webhook_id):
 @log_request
 def get_reviewer_settings():
     """Return the ad-reviewer auto-update settings."""
+    from config import (
+        AD_REVIEWER_PARALLEL_ADS_DEFAULT,
+        AD_REVIEWER_PARALLEL_ADS_MIN,
+        AD_REVIEWER_PARALLEL_ADS_MAX,
+    )
     db = get_database()
+    parallel_raw = db.get_setting('ad_reviewer_parallel_ads')
+    try:
+        parallel_ads = int(parallel_raw) if parallel_raw is not None else AD_REVIEWER_PARALLEL_ADS_DEFAULT
+    except (TypeError, ValueError):
+        parallel_ads = AD_REVIEWER_PARALLEL_ADS_DEFAULT
+    parallel_ads = max(
+        AD_REVIEWER_PARALLEL_ADS_MIN,
+        min(AD_REVIEWER_PARALLEL_ADS_MAX, parallel_ads),
+    )
     return json_response({
         'updatePatternsFromReviewerAdjustments': db.get_setting_bool(
             'update_patterns_from_reviewer_adjustments', default=True
         ),
         'minTrimThreshold': db.get_setting_float('min_trim_threshold', default=20.0),
+        'parallelAds': parallel_ads,
+        'parallelAdsDefault': AD_REVIEWER_PARALLEL_ADS_DEFAULT,
     })
 
 
@@ -1417,8 +1741,13 @@ def get_reviewer_settings():
 def update_reviewer_settings():
     """Update the ad-reviewer auto-update settings.
 
-    Body: {updatePatternsFromReviewerAdjustments: bool, minTrimThreshold: float}
+    Body: {updatePatternsFromReviewerAdjustments: bool, minTrimThreshold: float,
+           parallelAds: int}
     """
+    from config import (
+        AD_REVIEWER_PARALLEL_ADS_MIN,
+        AD_REVIEWER_PARALLEL_ADS_MAX,
+    )
     db = get_database()
     data = request.get_json() or {}
     if 'updatePatternsFromReviewerAdjustments' in data:
@@ -1432,6 +1761,18 @@ def update_reviewer_settings():
         if v <= 0 or v > 120:
             return error_response('minTrimThreshold must be between 1 and 120', 400)
         db.set_setting('min_trim_threshold', str(v))
+    if 'parallelAds' in data:
+        try:
+            n = int(data['parallelAds'])
+        except (TypeError, ValueError):
+            return error_response('parallelAds must be an integer', 400)
+        if not (AD_REVIEWER_PARALLEL_ADS_MIN <= n <= AD_REVIEWER_PARALLEL_ADS_MAX):
+            return error_response(
+                f'parallelAds must be between {AD_REVIEWER_PARALLEL_ADS_MIN} '
+                f'and {AD_REVIEWER_PARALLEL_ADS_MAX}',
+                400,
+            )
+        db.set_setting('ad_reviewer_parallel_ads', str(n), is_default=False)
     return get_reviewer_settings()
 
 

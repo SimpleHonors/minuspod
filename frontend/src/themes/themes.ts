@@ -525,6 +525,68 @@ export const THEMES: ThemePair[] = [
     },
     accentColor: '#5196ff',
   },
+  {
+    id: 'hulu',
+    label: 'Hulu',
+    group: 'Other',
+    light: null,
+    dark: {
+      background: '240 6% 6%',
+      foreground: '0 0% 98%',
+      card: '240 6% 10%',
+      'card-foreground': '0 0% 98%',
+      primary: '148 81% 50%',
+      'primary-foreground': '240 6% 6%',
+      secondary: '240 6% 14%',
+      'secondary-foreground': '0 0% 92%',
+      muted: '240 6% 12%',
+      'muted-foreground': '240 4% 62%',
+      accent: '148 40% 16%',
+      'accent-foreground': '148 80% 88%',
+      destructive: '0 72% 55%',
+      'destructive-foreground': '0 0% 100%',
+      border: '240 6% 18%',
+      input: '240 6% 14%',
+      ring: '148 81% 50%',
+    },
+    accentColor: '#1CE783',
+  },
+  {
+    id: 'obsidian',
+    label: 'Obsidian',
+    group: 'Other',
+    light: null,
+    dark: {
+      // True-black OLED theme. The page sits at ~2% lightness (perceptually black,
+      // pixels effectively off) but carries a faint cool-blue hue (222) so every
+      // surface lifts from a shared material rather than reading as grey patches
+      // pasted on a void. Depth is carried by a brighter-than-surface hairline
+      // border, not by fill lightness -- that is what keeps it premium, not flat.
+      background: '222 18% 2%',
+      foreground: '210 14% 92%',
+      card: '222 16% 6%',
+      'card-foreground': '210 14% 92%',
+      // Brand teal, brightened + saturated so it glows on true black instead of
+      // going muddy. Foreground is near-black for crisp text on the accent.
+      primary: '188 72% 56%',
+      'primary-foreground': '200 30% 6%',
+      secondary: '222 14% 10%',
+      'secondary-foreground': '210 14% 92%',
+      muted: '222 14% 9%',
+      // ~6.2:1 on card -> clears WCAG AA for secondary text with margin.
+      'muted-foreground': '215 12% 60%',
+      accent: '222 14% 12%',
+      'accent-foreground': '210 16% 96%',
+      destructive: '0 72% 58%',
+      'destructive-foreground': '0 0% 100%',
+      // Border is the brightest structural element so card/header/modal edges
+      // stay crisp against black; inputs recede one step until focused.
+      border: '222 12% 16%',
+      input: '222 12% 14%',
+      ring: '188 72% 56%',
+    },
+    accentColor: '#3fc2da',
+  },
 ];
 
 export function getThemeById(id: string): ThemePair | undefined {

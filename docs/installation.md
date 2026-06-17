@@ -1,4 +1,4 @@
-# Installation & Upgrading
+# Installation
 
 [< Docs index](README.md) | [Project README](../README.md)
 
@@ -63,7 +63,7 @@ Reuse the same `.env` and `data/` directory as the Quick Start, then:
 docker compose -f docker-compose.cpu.yml up -d
 ```
 
-That pulls `ttlequals0/minuspod:cpu` (the floating CPU tag). To pin a specific release, set `MINUSPOD_VERSION=2.0.21-cpu` in your `.env`. The `:latest` tag always points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag.
+That pulls `ttlequals0/minuspod:cpu` (the floating CPU tag). To pin a specific release, set `MINUSPOD_VERSION=2.8.13-cpu` in your `.env`. The `:latest` tag always points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag.
 
 Local CPU transcription with `faster-whisper` is slow on amd64 and slower on arm64. For anything beyond a quick test, offload Whisper to a remote API in your `.env`:
 
@@ -76,6 +76,36 @@ WHISPER_API_MODEL=whisper-large-v3-turbo
 
 Groq, OpenAI, or a self-hosted whisper.cpp server (see `docker-compose.whisper.yml`) all work here.
 
+### Intel hybrid CPU tuning (optional)
+
+Modern Intel CPUs (12th gen and newer) split their cores into fast P-cores and slow E-cores. The thread pool behind `faster-whisper` is not aware of that split, so on a hybrid chip the work can land on the slow E-cores and thrash the shared cache. Capping the thread count and keeping the work on the P-cores can make a big difference: one user reported a 30-minute episode dropping from roughly 20 minutes to under a minute on an i7-13620H. More threads is not automatically faster, so match the count to your hardware rather than maxing it.
+
+Two knobs, smallest change first:
+
+1. Cap the OpenMP thread pool to your P-core count. This alone removes the oversubscription:
+
+   ```bash
+   docker run -e OMP_NUM_THREADS=8 ... ttlequals0/minuspod:cpu
+   ```
+
+2. Pin the container to the P-cores so the scheduler cannot push work onto E-cores. Find the P-core ids with `lscpu --all --extended` (the higher-clocked cores), then:
+
+   ```bash
+   # Docker
+   docker run -e OMP_NUM_THREADS=8 --cpuset-cpus=0-11 ... ttlequals0/minuspod:cpu
+   ```
+
+   ```ini
+   # Podman Quadlet (minuspod.container)
+   [Container]
+   Environment=OMP_NUM_THREADS=8
+   CPUSetCPUs=0-11
+   ```
+
+   If you would rather bind threads than restrict the cgroup, `OMP_PROC_BIND=close` with `OMP_PLACES=cores` does the same job.
+
+Match `OMP_NUM_THREADS` and the cpuset range to your own chip; the values above are for a 6 P-core part with 12 P-threads. The payoff depends on the CPU and model size, so treat the numbers above as one data point rather than a promise. For sustained transcription, a remote Whisper API is still the better answer.
+
 <details>
 <summary>Build the CPU image locally</summary>
 
@@ -86,26 +116,6 @@ docker compose -f docker-compose.cpu.yml up -d --build
 ```
 
 </details>
-
-## Upgrading to 2.0.0+
-
-2.0.0 is a security hardening release. A `docker pull && restart` on a 1.x data volume boots without config changes, but several defaults tightened so a few setups need env-var tweaks. Full detail in [`CHANGELOG.md`](../CHANGELOG.md).
-
-**Likely to bite you if you do nothing:**
-
-- **Plain HTTP:** `SESSION_COOKIE_SECURE` now defaults to `true`, so browsers drop the session cookie. Login looks like it works then the next request is anonymous. Set `SESSION_COOKIE_SECURE=false` if you're not on HTTPS.
-- **Behind a reverse proxy (Cloudflare, cloudflared, nginx, Traefik):** set `MINUSPOD_TRUSTED_PROXY_COUNT=1`. Without it, login lockout and per-IP rate limits silently never fire. The container sees the proxy hop instead of the client. A startup WARN flags it. Full impact in `Remote Access / Security > Client IP for login lockout`.
-- **External API clients** (cron scripts, homegrown tools, third-party integrations): every `POST` / `PUT` / `DELETE` on `/api/v1/*` now needs an `X-CSRF-Token` header matching the `minuspod_csrf` cookie. The built-in UI handles it; raw curl scripts have to echo the cookie.
-- **`/docs` and `/openapi.yaml` bookmarks / health checks:** moved to `/api/v1/docs` and `/api/v1/openapi.yaml`. The old paths return 404.
-- **OpenAI-compatible provider relying on the `ANTHROPIC_API_KEY` fallback:** that fallback is gone. Set `OPENAI_API_KEY` explicitly or ad detection 401s. A startup WARN fires when the old shape is detected.
-
-**Quieter changes worth knowing:**
-
-- `SESSION_COOKIE_SAMESITE` now `Strict`. Flip to `Lax` only if a specific cross-site integration breaks.
-- Frontend and API must share an origin (`flask-cors` was removed). Put them behind the same reverse proxy.
-- Password minimum is now 12 characters. Existing hashes verify fine; the next password change picks up the new minimum.
-- Saving provider keys via `PUT /api/v1/settings/ad-detection` returns 409 unless `MINUSPOD_MASTER_PASSPHRASE` is set. Existing plaintext keys keep working; the setting endpoint refuses to write a new secret in cleartext.
-- Container runs as UID 1000. First boot chowns the data volume in place. Override with `APP_UID` / `APP_GID` or bypass with `docker run --user <N>` if the host volume belongs to a different UID.
 
 ---
 

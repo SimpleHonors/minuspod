@@ -431,22 +431,44 @@ class TextPatternMatcher:
         if self._pattern_vectors is None or self._pattern_vectors.shape[0] == 0:
             return matches
 
+        # Restrict scoring to the scope/tag/language-filtered subset. The
+        # buckets and self._pattern_vectors are built from ALL patterns at load
+        # time, so scoring against them directly defeats the filter and lets a
+        # wrong-scope / wrong-language pattern match (patterns-service-1), and
+        # in the fallback the filtered `patterns` list and the all-patterns
+        # vector matrix drift out of alignment (patterns-service-2).
+        applicable_ids = {p.id for p in patterns}
+
         try:
             if self._pattern_buckets:
                 for window_size, bucket in self._pattern_buckets.items():
+                    idxs = [
+                        i for i, p in enumerate(bucket['patterns'])
+                        if p.id in applicable_ids
+                    ]
+                    if not idxs:
+                        continue
+                    sub_patterns = [bucket['patterns'][i] for i in idxs]
+                    sub_vectors = bucket['vectors'][idxs]
                     step_size = window_size // 3
                     self._score_windows(
                         full_text, segment_map, segments, matches,
-                        bucket['patterns'], bucket['vectors'],
+                        sub_patterns, sub_vectors,
                         window_size, step_size
                     )
             else:
-                # Fallback: original fixed-window behavior
-                self._score_windows(
-                    full_text, segment_map, segments, matches,
-                    patterns, self._pattern_vectors,
-                    1500, 500
-                )
+                # Fallback: rebuild aligned vectors for just the applicable
+                # patterns so the list and matrix stay in lockstep.
+                tmpl_patterns = [p for p in patterns if p.text_template]
+                if tmpl_patterns and self._vectorizer is not None:
+                    sub_vectors = self._vectorizer.transform(
+                        [p.text_template for p in tmpl_patterns]
+                    )
+                    self._score_windows(
+                        full_text, segment_map, segments, matches,
+                        tmpl_patterns, sub_vectors,
+                        1500, 500
+                    )
 
         except ImportError:
             # ImportError propagates from _score_windows's local sklearn/numpy imports
@@ -885,9 +907,20 @@ class TextPatternMatcher:
             logger.warning(f"Rejecting pattern: generic/invalid sponsor '{sponsor}'")
             return None
 
-        # Validate ad duration - reject contaminated multi-ad spans
+        # Validate ad duration - reject contaminated multi-ad spans on the
+        # upper end, and short spans (< 15 s) on the lower end. Pattern #356
+        # (Patreon, 8 s) is the canonical floor false-positive: real sponsor
+        # reads almost never fit in under 15 seconds.
+        MIN_PATTERN_DURATION = 15  # shortest plausible sponsor read
         MAX_PATTERN_DURATION = 120  # 2 minutes - longest reasonable single ad read
         duration = end - start
+        if duration < MIN_PATTERN_DURATION:
+            logger.warning(
+                f"Skipping pattern creation: duration {duration:.0f}s below "
+                f"min {MIN_PATTERN_DURATION}s (likely a fragment or host mention, "
+                f"not a sponsor read)"
+            )
+            return None
         if duration > MAX_PATTERN_DURATION:
             logger.warning(
                 f"Skipping pattern creation: duration {duration:.0f}s exceeds "
@@ -935,6 +968,33 @@ class TextPatternMatcher:
                 )
                 return None
 
+        # Require the brand to appear at least twice in the ad_text. Real
+        # ads repeat the brand (intro + outro at minimum); a single mention
+        # is a strong signal of a host name-drop rather than a sponsor
+        # read. Pattern #354 (drink-champs Modelo) was the canonical
+        # false-positive: host conversation about "the big Modelo?" got
+        # passed to record_verification_misses as a missed ad and turned
+        # into a podcast-scoped pattern.
+        #
+        # Counts substring (not word-boundary) so brands that only appear
+        # inside a URL still pass ("DeleteMe" inside joindeleteme.com).
+        # Counts across name + aliases + whitespace-stripped variants so a
+        # sponsor stored as 'statefarm' still scores against a 'State Farm'
+        # transcript and vice versa.
+        if sponsor:
+            from community_export import count_brand_occurrences
+            sponsor_row = self.db.get_known_sponsor_by_name(sponsor) if self.db else None
+            if sponsor_row is None:
+                sponsor_row = {'name': sponsor, 'aliases': '[]'}
+            occurrences = count_brand_occurrences(ad_text, sponsor_row)
+            if occurrences < 2:
+                logger.warning(
+                    f"Skipping pattern creation: sponsor '{sponsor}' (with aliases) "
+                    f"appears only {occurrences}x in ad_text (need >=2) - likely "
+                    f"a host name-drop or verification-pass false positive"
+                )
+                return None
+
         try:
             sponsor_id = (
                 get_or_create_known_sponsor(self.db, sponsor) if sponsor else None
@@ -949,7 +1009,7 @@ class TextPatternMatcher:
                 network_id=network_id,
                 created_from_episode_id=episode_id,
                 duration=duration,
-                source_language=get_pattern_language(self.db),
+                source_language=get_pattern_language(self.db, slug=podcast_id),
             )
 
             logger.info(f"Created text pattern {pattern_id} for sponsor: {sponsor}")

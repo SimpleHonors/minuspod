@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import tempfile
@@ -87,9 +88,27 @@ def _safe_join_under(base: Path, *parts: str) -> Path:
 
 
 class Storage:
-    """Storage manager using SQLite for metadata and filesystem for large files."""
+    """Storage manager using SQLite for metadata and filesystem for large files.
+
+    Singleton, mirroring Database. Without this, every /api/v1/health call
+    (or any get_storage() accessor) constructs a fresh Storage and re-fires
+    the init log line - that path was producing ~120 lines/hr in prod.
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, data_dir: Optional[str] = None):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self, data_dir: Optional[str] = None):
+        if self._initialized:
+            return
         # Tests and non-container deploys need a configurable root;
         # /app/data is the in-container default.
         if data_dir is None:
@@ -109,6 +128,7 @@ class Storage:
         from database import Database
         self.db = Database(str(self.data_dir))
 
+        self._initialized = True
         logger.info(f"Storage initialized with data_dir: {self.data_dir}")
 
     def get_podcast_dir(self, slug: str) -> Path:
@@ -457,14 +477,20 @@ class Storage:
 
             artwork_path = podcast_dir / f"artwork{ext}"
 
+            # Write the new image to a temp file and atomically move it into
+            # place, then delete the other-extension stale files. Deleting only
+            # after the new artwork is durable means a failed write can never
+            # leave the podcast with no artwork (secrets-storage-6).
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False,
+                                             dir=podcast_dir, suffix='.tmp') as tmp:
+                tmp.write(image_data)
+                tmp_path = tmp.name
+            os.replace(tmp_path, artwork_path)
+
             for old_ext in ('.jpg', '.png', '.gif', '.webp'):
                 old_path = podcast_dir / f"artwork{old_ext}"
                 if old_path.exists() and old_path != artwork_path:
                     old_path.unlink()
-
-            # Save image
-            with open(artwork_path, 'wb') as f:
-                f.write(image_data)
 
             # Update database
             self.db.update_podcast(
@@ -586,6 +612,32 @@ class Storage:
         if deleted:
             logger.debug(f"[{slug}:{episode_id}] Deleted processed/original audio files")
         return deleted
+
+    def delete_original_only(self, slug: str, episode_id: str,
+                             extension: str = ".mp3") -> Tuple[bool, int]:
+        """Delete just the retained pre-cut original for one episode.
+
+        Returns (deleted, bytes_freed). Processed file(s), DB rows, and
+        transcripts are untouched. Used by the 2.5.14 two-pass retention
+        cleanup so an operator can drop originals on a shorter schedule
+        than the processed output without resetting the episode to
+        Discovered.
+        """
+        original = self.get_original_path(slug, episode_id, extension)
+        if not original or not original.exists():
+            return False, 0
+        try:
+            size = original.stat().st_size
+            original.unlink()
+            logger.debug(
+                f"[{slug}:{episode_id}] Deleted original audio (freed {size} bytes)"
+            )
+            return True, size
+        except OSError as exc:
+            logger.warning(
+                f"[{slug}:{episode_id}] Failed to delete original audio: {exc}"
+            )
+            return False, 0
 
 
     def cleanup_episode_files(self, slug: str, episode_id: str) -> int:
