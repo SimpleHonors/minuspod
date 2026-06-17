@@ -63,6 +63,12 @@ NORMALIZE_PRESETS = {
     'gentle':     'dynaudnorm=f=500:g=11:p=0.97',
     'normal':     'dynaudnorm=f=200:g=15:p=0.95',
     'aggressive': 'dynaudnorm=f=100:g=21:p=0.90',
+    # Stronger tiers add make-up gain (m) to lift quiet passages and a
+    # compression factor (s) on top, so dynamics get flattened harder.
+    # 'maximum' is near-broadcast-flat; on already-consistent audio it can
+    # introduce mild pumping, which is the trade-off for the most even level.
+    'extreme':    'dynaudnorm=f=75:g=25:p=0.95:m=20:s=15',
+    'maximum':    'dynaudnorm=f=50:g=31:p=0.95:m=30:s=25',
 }
 DEFAULT_NORMALIZE_INTENSITY = 'aggressive'
 
@@ -93,8 +99,8 @@ class AudioProcessor:
 
     def normalize_audio(self, input_path: str,
                         intensity: str = DEFAULT_NORMALIZE_INTENSITY) -> Optional[str]:
-        """Run a second ffmpeg pass to flatten dynamic range (loud ads vs
-        quiet hosts). Returns the path of a new normalized file on success,
+        """Run a second ffmpeg pass to even out loudness across an episode
+        (lift quiet passages, tame loud peaks). Returns the path of a new normalized file on success,
         or None on failure. Caller is responsible for cleanup of the input
         when swapping in the returned path.
 

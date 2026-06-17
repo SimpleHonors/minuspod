@@ -47,13 +47,14 @@ function AudioSection({
             <ToggleSwitch
               checked={audioNormalizeEnabled}
               onChange={onAudioNormalizeEnabledChange}
-              ariaLabel="Flatten Loud Ads"
+              ariaLabel="Audio Leveling"
             />
-            <span className="text-sm font-medium text-foreground">Flatten Loud Ads / Music Inserts</span>
+            <span className="text-sm font-medium text-foreground">Audio Leveling (loudness normalization)</span>
           </label>
           <p className="mt-2 text-sm text-muted-foreground ml-14">
             Runs a second ffmpeg pass (dynaudnorm) on the final audio to even out
-            volume between quiet hosts and loud ads or music. Adds ~3-5s per episode.
+            the volume between quiet and loud passages, so the episode plays at a
+            more consistent level. Adds ~3-5s per episode.
           </p>
         </div>
 
@@ -69,11 +70,13 @@ function AudioSection({
               className="w-full px-4 py-2 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
             >
               <option value="gentle">Gentle - Light leveling, preserves dynamics</option>
-              <option value="normal">Normal - Balanced flattening</option>
-              <option value="aggressive">Aggressive - Strong leveling for loud ads (recommended)</option>
+              <option value="normal">Normal - Balanced leveling</option>
+              <option value="aggressive">Aggressive - Strong leveling (recommended)</option>
+              <option value="extreme">Extreme - Heavy compression, very even level</option>
+              <option value="maximum">Maximum - Flattest possible (may add slight pumping)</option>
             </select>
             <p className="mt-1 text-sm text-muted-foreground">
-              More aggressive settings flatten harder but reduce natural dynamics
+              Stronger settings flatten harder but reduce natural dynamics; Extreme and Maximum add compression on top.
             </p>
           </div>
         )}

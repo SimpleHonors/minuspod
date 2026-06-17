@@ -103,13 +103,21 @@ class AudioAnalyzer:
 
         return settings
 
-    def _load_cue_config(self):
-        """Read the audio-cue experiment settings fresh, per run (issue #350).
+    def _load_cue_config(self, feed_id: Optional[int] = None):
+        """Resolve the audio cue detector for this run.
 
-        This analyzer is a long-lived singleton, so reading the enable flag and
-        tuneables here -- not at construction -- lets the Settings toggle take
-        effect without a container restart. Returns (enabled, detector); the
-        detector is None when the experiment is off or no DB is available.
+        Priority order (#350 v2):
+
+        1. Per-feed user-defined cue templates take precedence when the feed has
+           at least one enabled template. The template matcher finds the exact
+           user-marked sound.
+        2. Otherwise, the existing spectral burst detector runs as a fallback so
+           feeds without user templates still get a cue signal (provided the
+           global ``audio_cue_detection_enabled`` toggle is on).
+
+        Both detectors emit the same ``audio_cue`` ``AudioSegmentSignal``;
+        downstream code (``AudioEnforcer``, ``cue_boundary_snap``) consumes them
+        the same way. Returns ``(enabled, detector)``.
         """
         if not self.db:
             return False, None
@@ -117,11 +125,36 @@ class AudioAnalyzer:
             AUDIO_CUE_FREQ_MIN_HZ, AUDIO_CUE_FREQ_MAX_HZ,
             AUDIO_CUE_PROMINENCE_DB, AUDIO_CUE_MIN_CONFIDENCE,
         )
-        from .cue_detector import AudioCueDetector
         try:
+            if feed_id is not None and self.db.feed_has_enabled_cue_templates(feed_id):
+                from .cue_template_matcher import (
+                    AudioCueTemplateMatcher, DEFAULT_MATCH_SCORE,
+                )
+                templates = self.db.list_cue_templates(
+                    feed_id, include_disabled=False,
+                )
+                score = self.db.get_setting_float(
+                    'audio_cue_template_score', DEFAULT_MATCH_SCORE,
+                )
+                matcher = AudioCueTemplateMatcher(
+                    templates=templates,
+                    score_threshold=score,
+                )
+                if matcher.is_usable:
+                    logger.info(
+                        f"Cue detection: using {len(templates)} per-feed "
+                        f"template(s) for feed_id={feed_id}"
+                    )
+                    return True, matcher
+                logger.warning(
+                    f"Cue detection: feed_id={feed_id} templates failed "
+                    "to load; falling back to spectral detector"
+                )
+
             if not self.db.get_setting_bool('audio_cue_detection_enabled', default=False):
                 return False, None
 
+            from .cue_detector import AudioCueDetector
             detector = AudioCueDetector(
                 freq_min_hz=self.db.get_setting_float('audio_cue_freq_min_hz', AUDIO_CUE_FREQ_MIN_HZ),
                 freq_max_hz=self.db.get_setting_float('audio_cue_freq_max_hz', AUDIO_CUE_FREQ_MAX_HZ),
@@ -174,7 +207,8 @@ class AudioAnalyzer:
         audio_path: str,
         transcript_segments: Optional[List[Dict]] = None,
         run_parallel: bool = False,
-        status_callback: Optional[callable] = None
+        status_callback: Optional[callable] = None,
+        feed_id: Optional[int] = None,
     ) -> AudioAnalysisResult:
         """
         Run audio analysis (volume + transition detection).
@@ -250,7 +284,7 @@ class AudioAnalyzer:
         # Audio cue detection (issue #350) -- opt-in. Settings are read per run
         # so the toggle takes effect without a restart. Runs its own band-passed
         # ffmpeg pass, so only when the experiment is enabled.
-        cue_enabled, cue_detector = self._load_cue_config()
+        cue_enabled, cue_detector = self._load_cue_config(feed_id=feed_id)
         if cue_enabled and cue_detector:
             if status_callback:
                 status_callback("analyzing: audio cues", 40)

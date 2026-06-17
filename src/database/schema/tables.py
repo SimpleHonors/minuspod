@@ -299,6 +299,26 @@ CREATE TABLE IF NOT EXISTS ad_reviewer_log (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_reviewer_log_episode ON ad_reviewer_log(episode_id);
 CREATE INDEX IF NOT EXISTS idx_ad_reviewer_log_podcast ON ad_reviewer_log(podcast_id);
+
+-- audio_cue_templates (per-feed user-defined ding/stinger templates, #350 v2)
+-- mfcc_blob: float32 little-endian, shape (n_frames, n_coeffs) row-major.
+-- Frames are 25 ms / 10 ms hop @ sample_rate Hz. n_coeffs stored separately.
+CREATE TABLE IF NOT EXISTS audio_cue_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    podcast_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    source_episode_id TEXT,
+    source_offset_s REAL NOT NULL,
+    duration_s REAL NOT NULL,
+    sample_rate INTEGER NOT NULL,
+    n_coeffs INTEGER NOT NULL,
+    mfcc_blob BLOB NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    created_by TEXT DEFAULT 'user',
+    FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_cue_templates_feed ON audio_cue_templates(podcast_id, enabled);
 """
 
 # Indexes that depend on columns added by migrations - created separately

@@ -1,0 +1,10 @@
+# Ultra-slim backend-only overlay: FROM last-deployed -8 image + only the
+# fixed src/. Skips the frontend rebuild (pre-existing TS errors on staging
+# unrelated to the /all NameError). Used to ship the d54fe99 _get_components
+# fix without re-running the broken frontend build.
+FROM minuspod:test-merge-20260519-8
+
+WORKDIR /app
+COPY src/ ./src/
+
+RUN find ./src -type f -name '*.py' -exec chmod 644 {} \;

@@ -393,8 +393,6 @@ class SchemaMixin:
             ('audio_analysis_override', 'TEXT'),
             ('created_at', "TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"),
             ('auto_process_override', 'TEXT'),
-            ('language_override', 'TEXT'),
-            ('title_override', 'TEXT'),
             ('skip_second_pass', 'INTEGER DEFAULT 0'),
             ('max_episodes', 'INTEGER'),
             ('etag', 'TEXT'),
@@ -1209,6 +1207,69 @@ class SchemaMixin:
         except Exception as e:
             conn.rollback()
             logger.error(f"opus 4.8 token cost correction failed: {e}")
+
+        # Refresh default prompts to mention audio cue evidence (#350 v2).
+        # Marker phrase per prompt is unique to the latest revision; idempotent.
+        # 'Multiple cues can fire' was added in the v2.1 refinement (commit
+        # 4e141ded) to warn the LLM that clustered cues can sit inside one
+        # break. The resurrect prompt was not re-touched in v2.1 so it keeps
+        # the v2 'AUDIO CUE' marker.
+        try:
+            from database import (
+                DEFAULT_REVIEW_PROMPT, DEFAULT_RESURRECT_PROMPT,
+            )
+            for key, value, marker in (
+                ('system_prompt', DEFAULT_SYSTEM_PROMPT, 'Multiple cues can fire'),
+                ('verification_prompt', DEFAULT_VERIFICATION_PROMPT, 'Multiple cues can fire'),
+                ('review_prompt', DEFAULT_REVIEW_PROMPT, 'Multiple cues can fire'),
+                ('resurrect_prompt', DEFAULT_RESURRECT_PROMPT, 'AUDIO CUE'),
+            ):
+                row = conn.execute(
+                    "SELECT value, is_default FROM settings WHERE key = ?",
+                    (key,)
+                ).fetchone()
+                if row and row['is_default'] and marker not in (row['value'] or ''):
+                    conn.execute(
+                        "UPDATE settings SET value = ? WHERE key = ?",
+                        (value, key),
+                    )
+                    conn.commit()
+                    logger.info(
+                        f"Migration: Updated default {key} with audio cue guidance (#350 v2)"
+                    )
+        except Exception as e:
+            logger.warning(f"Migration failed for audio cue prompt refresh: {e}")
+
+        # Per-feed audio cue templates (#350 v2). User-marked ding/stinger
+        # samples used by the template-based cue matcher.
+        try:
+            fresh = not self._table_exists(conn, 'audio_cue_templates')
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audio_cue_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    podcast_id INTEGER NOT NULL,
+                    label TEXT NOT NULL,
+                    source_episode_id TEXT,
+                    source_offset_s REAL NOT NULL,
+                    duration_s REAL NOT NULL,
+                    sample_rate INTEGER NOT NULL,
+                    n_coeffs INTEGER NOT NULL,
+                    mfcc_blob BLOB NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    created_by TEXT DEFAULT 'user',
+                    FOREIGN KEY (podcast_id) REFERENCES podcasts(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cue_templates_feed "
+                "ON audio_cue_templates(podcast_id, enabled)"
+            )
+            conn.commit()
+            if fresh:
+                logger.info("Migration: Created audio_cue_templates table")
+        except Exception as e:
+            logger.warning(f"audio_cue_templates table creation: {e}")
 
     def _run_correct_opus48_token_cost(self, conn):
         """One-time correction of recorded Opus 4.8 (`claudeopus48`) token cost.
@@ -2602,26 +2663,6 @@ class SchemaMixin:
             ('verification_model', env_model or DEFAULT_MODEL)
         )
 
-        # Chunked transcription tuning (parallel API path).
-        # max_chunk_seconds: 600 for Whisper-class backends, 28 for Parakeet (30s ONNX cap).
-        # concurrent_chunks: match backend's worker count (Parakeet=4, whisper.cpp ~1).
-        # chunk_overlap_seconds: dedupe overlap at chunk boundaries.
-        conn.execute(
-            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
-               ON CONFLICT(key) DO NOTHING""",
-            ('transcribe_max_chunk_seconds', '600')
-        )
-        conn.execute(
-            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
-               ON CONFLICT(key) DO NOTHING""",
-            ('transcribe_concurrent_chunks', '4')
-        )
-        conn.execute(
-            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
-               ON CONFLICT(key) DO NOTHING""",
-            ('transcribe_chunk_overlap_seconds', '30')
-        )
-
         # Migrate old second_pass settings to verification settings
         try:
             old_prompt = None
@@ -2713,19 +2754,6 @@ class SchemaMixin:
             """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
                ON CONFLICT(key) DO NOTHING""",
             ('audio_bitrate', '128k')
-        )
-
-        # Loudness normalization (dynaudnorm second pass). Off by default —
-        # opt-in so existing users see no behavior change.
-        conn.execute(
-            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
-               ON CONFLICT(key) DO NOTHING""",
-            ('audio_normalize_enabled', 'false')
-        )
-        conn.execute(
-            """INSERT INTO settings (key, value, is_default) VALUES (?, ?, 1)
-               ON CONFLICT(key) DO NOTHING""",
-            ('audio_normalize_intensity', 'aggressive')
         )
 
         # VTT transcripts enabled (Podcasting 2.0)
