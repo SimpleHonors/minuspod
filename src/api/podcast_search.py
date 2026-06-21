@@ -58,7 +58,7 @@ def search_podcasts():
         'X-Auth-Key': api_key,
         'X-Auth-Date': str(epoch_time),
         'Authorization': sha1_hash,
-        'User-Agent': 'MinusPod/1.0',
+        'User-Agent': 'SparkyPod/1.0',
     }
 
     params = {'q': query, 'max': 10, 'fulltext': ''}

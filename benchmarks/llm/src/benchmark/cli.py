@@ -1,4 +1,4 @@
-"""Typer CLI for the MinusPod LLM benchmark."""
+"""Typer CLI for the SparkyPod LLM benchmark."""
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +23,7 @@ from .storage import scan_calls
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Offline LLM ad-detection benchmark for MinusPod.",
+    help="Offline LLM ad-detection benchmark for SparkyPod.",
 )
 
 
@@ -53,18 +53,18 @@ def _resolve_prompt(snapshot: Optional[Path]) -> tuple[str, str]:
 
 @app.command()
 def capture(
-    episode_url: str = typer.Option(..., "--episode-url", help="MinusPod UI URL of the episode to capture"),
+    episode_url: str = typer.Option(..., "--episode-url", help="SparkyPod UI URL of the episode to capture"),
     config_path: Path = typer.Option(Path("benchmark.toml"), "--config", help="Path to benchmark.toml"),
 ) -> None:
-    """Pull an episode from MinusPod into data/candidates/."""
+    """Pull an episode from SparkyPod into data/candidates/."""
     _setup_logging()
     cfg = _load(config_path)
-    session = auth.acquire(cfg.minuspod)
+    session = auth.acquire(cfg.sparkypod)
     candidates_dir = _root() / "data" / "candidates"
     corpus_dir = cfg.corpus.path
 
     candidate_dir = capture_mod.capture(
-        base_url=cfg.minuspod.base_url,
+        base_url=cfg.sparkypod.base_url,
         episode_url=episode_url,
         session=session,
         candidates_dir=candidates_dir,
@@ -145,7 +145,7 @@ def validate(
 def refresh_pricing_cmd(
     config_path: Path = typer.Option(Path("benchmark.toml"), "--config"),
 ) -> None:
-    """Fetch a new pricing snapshot via MinusPod's pricing_fetcher."""
+    """Fetch a new pricing snapshot via SparkyPod's pricing_fetcher."""
     _setup_logging()
     _load(config_path)
     snap = pricing.fetch_current()

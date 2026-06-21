@@ -1,4 +1,4 @@
-"""MinusPod offline LLM ad-detection benchmark."""
+"""SparkyPod offline LLM ad-detection benchmark."""
 import sys
 from pathlib import Path
 

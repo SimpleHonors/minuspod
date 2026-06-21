@@ -1,4 +1,4 @@
-"""Episode CRUD mixin for MinusPod database."""
+"""Episode CRUD mixin for SparkyPod database."""
 import json
 import logging
 from email.utils import parsedate_to_datetime

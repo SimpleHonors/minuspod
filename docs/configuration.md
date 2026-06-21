@@ -69,11 +69,11 @@ Long episodes are chunked into overlapping windows before being sent to the dete
 
 API: `PUT /api/v1/settings` accepts `windowSizeSeconds` and `windowOverlapSeconds`. Cross-field validation rejects `overlap >= size` with a 400. The reset-to-default buttons in the UI clear the stored value so the built-in defaults apply on the next episode; no restart needed.
 
-When the provider returns a 429 because a single window's request exceeds the per-minute token cap, MinusPod flags the episode with a `Rate Limit Structural` error and fires the matching webhook (see [API & Webhooks](api-and-webhooks.md#events)). Lower **Window size** here, or move to a higher provider tier; the retry loop won't eventually succeed because the request itself is too big.
+When the provider returns a 429 because a single window's request exceeds the per-minute token cap, SparkyPod flags the episode with a `Rate Limit Structural` error and fires the matching webhook (see [API & Webhooks](api-and-webhooks.md#events)). Lower **Window size** here, or move to a higher provider tier; the retry loop won't eventually succeed because the request itself is too big.
 
 ### VAD Gap Detector (advanced)
 
-Whisper uses Voice Activity Detection to skip regions it classifies as silence or non-speech. Sped-up legal disclaimers at the tail of DIA ads, distorted interstitials, and some ad intros fall into that bucket and never make it into the transcript. Since MinusPod's Claude, text-pattern, and roll detectors all run against the transcript, these regions are invisible to them and can leak into the processed output, usually at the very start or end of an episode.
+Whisper uses Voice Activity Detection to skip regions it classifies as silence or non-speech. Sped-up legal disclaimers at the tail of DIA ads, distorted interstitials, and some ad intros fall into that bucket and never make it into the transcript. Since SparkyPod's Claude, text-pattern, and roll detectors all run against the transcript, these regions are invisible to them and can leak into the processed output, usually at the very start or end of an episode.
 
 The VAD gap detector (added in 2.0.7) runs after the other stages and treats untranscribed spans as ad candidates:
 
@@ -169,13 +169,13 @@ Reprocessing an episode re-runs detection without re-fetching it from the source
 
 ## Community Patterns (Optional)
 
-MinusPod can share and receive ad patterns from a community-maintained seed list. Patterns describe recognized ad reads (sponsor scripts, host-read pre-rolls, etc.) so new MinusPod instances skip the LLM detection step for ads that have already been identified elsewhere.
+SparkyPod can share and receive ad patterns from a community-maintained seed list. Patterns describe recognized ad reads (sponsor scripts, host-read pre-rolls, etc.) so new SparkyPod instances skip the LLM detection step for ads that have already been identified elsewhere.
 
-The feature is **opt-in** and **off by default**. When enabled, your MinusPod instance pulls a manifest of community patterns from this repo on a schedule you control. To submit your own patterns back, open the Patterns page Export dialog and pick **Submit to community**: the app runs quality gates over your selection, shows what will pass, and downloads a single bundle file. Drop it into your fork of `patterns/community/` and open one PR.
+The feature is **opt-in** and **off by default**. When enabled, your SparkyPod instance pulls a manifest of community patterns from this repo on a schedule you control. To submit your own patterns back, open the Patterns page Export dialog and pick **Submit to community**: the app runs quality gates over your selection, shows what will pass, and downloads a single bundle file. Drop it into your fork of `patterns/community/` and open one PR.
 
 ### What you get when enabled
 
-- Faster ad detection for sponsors other MinusPod users have already identified
+- Faster ad detection for sponsors other SparkyPod users have already identified
 - New patterns appear automatically as the community contributes them
 - Local patterns you build stay private unless you choose to submit them
 

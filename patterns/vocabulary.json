@@ -1,6 +1,6 @@
 {
   "vocabulary_version": 1,
-  "description": "Canonical tag list for MinusPod community patterns. Authoritative source is the VALID_TAGS constant + tag_vocabulary.csv in app code. Regenerate this file when the source changes.",
+  "description": "Canonical tag list for SparkyPod community patterns. Authoritative source is the VALID_TAGS constant + tag_vocabulary.csv in app code. Regenerate this file when the source changes.",
   "special_tags": [
     {
       "tag": "universal",

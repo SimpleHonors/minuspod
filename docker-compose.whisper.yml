@@ -1,7 +1,7 @@
 # Standalone whisper.cpp server for remote transcription.
 #
 # Downloads the model and starts an OpenAI-compatible transcription server
-# that MinusPod can use as a whisper backend.
+# that SparkyPod can use as a whisper backend.
 #
 # Quick start:
 #   1. Download the model:
@@ -12,7 +12,7 @@
 #   2. Start the server:
 #      docker compose -f docker-compose.whisper.yml up -d
 #
-#   3. Configure MinusPod (.env or docker-compose.yml):
+#   3. Configure SparkyPod (.env or docker-compose.yml):
 #      WHISPER_BACKEND=openai-api
 #      WHISPER_API_BASE_URL=http://whisper-server:8765/v1
 #      WHISPER_DEVICE=cpu
@@ -20,12 +20,12 @@
 # The `whisper-server` hostname resolves only when both stacks share
 # a Docker network. Either merge this service into your main
 # docker-compose.yml, or run both with the same explicit network
-# (e.g. `docker network create minuspod-net`, then add
-# `networks: [minuspod-net]` to both services, with `networks:
-# minuspod-net: external: true` at the bottom of each file).
+# (e.g. `docker network create sparkypod-net`, then add
+# `networks: [sparkypod-net]` to both services, with `networks:
+# sparkypod-net: external: true` at the bottom of each file).
 #
 # The server listens on port 8765 with word-level timestamps (--dtw) for
-# precise ad boundary detection. MinusPod sends preprocessed 16kHz mono WAV,
+# precise ad boundary detection. SparkyPod sends preprocessed 16kHz mono WAV,
 # so --convert is not needed.
 
 services:
@@ -36,7 +36,7 @@ services:
     ports:
       # Bind to localhost only: whisper.cpp's server is unauthenticated, so do
       # not publish it on every host interface. Both stacks share a Docker
-      # network, so MinusPod still reaches it via the whisper-server hostname
+      # network, so SparkyPod still reaches it via the whisper-server hostname
       # (docker-3).
       - "127.0.0.1:8765:8765"
     volumes:

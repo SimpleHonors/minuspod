@@ -1,4 +1,4 @@
-"""Capture an episode from a MinusPod UI URL into data/candidates/."""
+"""Capture an episode from a SparkyPod UI URL into data/candidates/."""
 from __future__ import annotations
 
 import json
@@ -213,7 +213,7 @@ def _get(client: httpx.Client, url: str) -> dict:
 
 def _build_truth_template(episode_data: dict, segments: list[dict]) -> str:
     lines: list[str] = [
-        "# Pre-populated from MinusPod production ad markers.",
+        "# Pre-populated from SparkyPod production ad markers.",
         "# Verify each ad: check boundaries, confirm text matches transcript.",
         "# Use the no-ads marker (uncomment) if this episode has no ads:",
         "# # Verified: no ads in this episode.",

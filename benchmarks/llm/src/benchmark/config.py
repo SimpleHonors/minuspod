@@ -9,7 +9,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class MinusPodConfig:
+class SparkyPodConfig:
     base_url: str
     password_env: str
     session_cache_path: Path
@@ -58,7 +58,7 @@ class CorpusConfig:
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
-    minuspod: MinusPodConfig
+    sparkypod: SparkyPodConfig
     providers: dict[str, ProviderConfig]
     models: list[ModelConfig]
     run: RunConfig
@@ -85,13 +85,13 @@ def load(path: str | Path = "benchmark.toml") -> BenchmarkConfig:
 
 
 def _parse(raw: dict[str, Any], base_dir: Path) -> BenchmarkConfig:
-    if "minuspod" not in raw:
-        raise ConfigError("Missing [minuspod] section")
-    mp = raw["minuspod"]
-    minuspod = MinusPodConfig(
-        base_url=_require(mp, "base_url", "minuspod"),
-        password_env=_require(mp, "password_env", "minuspod"),
-        session_cache_path=Path(mp.get("session_cache_path", "~/.cache/minuspod-benchmark/session.json")).expanduser(),
+    if "sparkypod" not in raw:
+        raise ConfigError("Missing [sparkypod] section")
+    mp = raw["sparkypod"]
+    sparkypod = SparkyPodConfig(
+        base_url=_require(mp, "base_url", "sparkypod"),
+        password_env=_require(mp, "password_env", "sparkypod"),
+        session_cache_path=Path(mp.get("session_cache_path", "~/.cache/sparkypod-benchmark/session.json")).expanduser(),
     )
 
     providers_raw = raw.get("providers", {})
@@ -138,7 +138,7 @@ def _parse(raw: dict[str, Any], base_dir: Path) -> BenchmarkConfig:
         corpus_path = (base_dir / corpus_path).resolve()
     corpus = CorpusConfig(path=corpus_path)
 
-    return BenchmarkConfig(minuspod=minuspod, providers=providers, models=models, run=run, corpus=corpus)
+    return BenchmarkConfig(sparkypod=sparkypod, providers=providers, models=models, run=run, corpus=corpus)
 
 
 def _require(d: dict[str, Any], key: str, ctx: str) -> Any:

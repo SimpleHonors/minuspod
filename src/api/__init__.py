@@ -1,4 +1,4 @@
-"""REST API for MinusPod web UI."""
+"""REST API for SparkyPod web UI."""
 import json
 import logging
 import os

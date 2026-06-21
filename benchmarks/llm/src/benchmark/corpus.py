@@ -2,7 +2,7 @@
 
 windows.json stores per-window boundaries and transcript_lines (the
 ``[start s - end s] text`` strings production builds for each segment).
-The runner assembles the full LLM prompt at call time by calling MinusPod's
+The runner assembles the full LLM prompt at call time by calling SparkyPod's
 ``format_window_prompt`` with episode metadata + these transcript_lines.
 """
 from __future__ import annotations

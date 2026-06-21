@@ -91,7 +91,7 @@ Submitting creates a new pattern with `created_by='user'` and writes a `'create'
 
 ### Audio Cue Templates
 
-If a show plays a recurring ding or stinger around its ad breaks, you can teach MinusPod that exact sound. Open the feed and expand Audio Cue Templates, then click `+ Mark cue` and pick a recent episode whose original audio is still retained. The picker only lists episodes that still have their original, since a cue can sit inside a removed ad.
+If a show plays a recurring ding or stinger around its ad breaks, you can teach SparkyPod that exact sound. Open the feed and expand Audio Cue Templates, then click `+ Mark cue` and pick a recent episode whose original audio is still retained. The picker only lists episodes that still have their original, since a cue can sit inside a removed ad.
 
 The mark dialog uses the same waveform as the ad editor. Drag the green and red pins to bracket the cue (0.2 to 4 seconds), or play to the sound and use Set START / Set END at the playhead. The Snap to onset assist nudges an edge to the nearest sharp amplitude rise so a short ding is easy to bracket tightly; turn it off for a ramped sound with no clean attack. Pick a cue type, then Save, or Save and preview to see every place the cue matches on that episode before it goes live.
 

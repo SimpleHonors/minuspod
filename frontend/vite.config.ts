@@ -36,8 +36,8 @@ export default defineConfig({
         ],
       },
       manifest: {
-        name: 'MinusPod',
-        short_name: 'MinusPod',
+        name: 'SparkyPod',
+        short_name: 'SparkyPod',
         description: 'Podcast ad removal and feed management',
         theme_color: '#2ea8c7',
         background_color: '#f1f4f6',

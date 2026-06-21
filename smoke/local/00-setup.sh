@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pull ttlequals0/minuspod:2.0.0 and run isolated container on port 8001.
+# Pull SimpleHonors/sparkypod:2.0.0 and run isolated container on port 8001.
 # Sets MINUSPOD_PASSWORD via -e so login works for tests.
 #
 # Idempotent: if a container with the same name already exists, it's removed.
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 TEST_NAME="00-setup" source "$SCRIPT_DIR/../lib/common.sh"
 
-IMAGE="${IMAGE:-ttlequals0/minuspod:2.0.0}"
+IMAGE="${IMAGE:-SimpleHonors/sparkypod:2.0.0}"
 PORT="${PORT:-8001}"
 
 log "pulling $IMAGE"

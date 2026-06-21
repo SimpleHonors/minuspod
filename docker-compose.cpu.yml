@@ -1,7 +1,7 @@
 # =============================================================================
-# CPU-only MinusPod (issue #184). No GPU required.
+# CPU-only SparkyPod (issue #184). No GPU required.
 #
-# Pulls ttlequals0/minuspod:cpu (or pin via MINUSPOD_VERSION=2.0.21-cpu) from
+# Pulls SimpleHonors/sparkypod:cpu (or pin via MINUSPOD_VERSION=2.0.21-cpu) from
 # Docker Hub. To build locally instead -- e.g. when modifying Dockerfile.cpu --
 # uncomment the `build:` block below and run with `--build`.
 #
@@ -17,8 +17,8 @@
 # =============================================================================
 
 services:
-  minuspod:
-    image: ttlequals0/minuspod:${MINUSPOD_VERSION:-cpu}
+  sparkypod:
+    image: SimpleHonors/sparkypod:${MINUSPOD_VERSION:-cpu}
     # Uncomment to build locally from Dockerfile.cpu instead of pulling.
     # build:
     #   context: .
@@ -27,7 +27,7 @@ services:
     # manifest (linux/amd64 + linux/arm64). Docker picks the matching
     # variant automatically. Add `platform: linux/amd64` here only if you
     # need to force amd64 emulation on an arm64 host.
-    # The container ships a non-root `minuspod` user at UID/GID 1000
+    # The container ships a non-root `sparkypod` user at UID/GID 1000
     # (entrypoint.sh drops root via setpriv after fixing volume ownership).
     # Override here to pin a specific APP_UID/APP_GID if your volume is
     # owned by a different user -- e.g. `user: "2000:2000"`.

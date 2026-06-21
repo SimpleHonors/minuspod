@@ -125,7 +125,7 @@ class TestBuildCombinedFeed:
         items = root.findall('./channel/item')
         assert len(items) == 2
         # Channel-level title is the unified label
-        assert root.find('./channel/title').text == 'MinusPod — All Podcasts'
+        assert root.find('./channel/title').text == 'SparkyPod — All Podcasts'
 
     def test_prefixes_podcast_title_in_episode_title(self):
         parser = RSSParser(base_url='http://podcast.example:8080')
@@ -172,7 +172,7 @@ class TestBuildCombinedFeed:
         xml = parser.build_combined_feed([])
 
         root = ET.fromstring(xml)
-        assert root.find('./channel/title').text == 'MinusPod — All Podcasts'
+        assert root.find('./channel/title').text == 'SparkyPod — All Podcasts'
         assert root.findall('./channel/item') == []
 
     def test_channel_artwork_points_at_minuspod_logo(self):

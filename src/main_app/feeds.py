@@ -177,7 +177,7 @@ def refresh_rss_feed(slug: str, feed_url: str, force: bool = False):
                 update_kwargs['last_modified_header'] = new_last_modified
             db.update_podcast(slug, **update_kwargs)
 
-            # Map iTunes categories to MinusPod vocabulary tags, then refresh the
+            # Map iTunes categories to SparkyPod vocabulary tags, then refresh the
             # RSS layer of the podcast's tags. set_podcast_tags also folds in
             # episode-level tags and the user_tags layer.
             try:

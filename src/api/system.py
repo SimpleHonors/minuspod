@@ -279,7 +279,7 @@ def backup_database():
                 enc_blob = _encrypt_bytes(get_database(), blob)
                 with open(tmp_path, 'wb') as f:
                     f.write(enc_blob)
-                filename = f"minuspod-backup-{timestamp}.db.enc"
+                filename = f"sparkypod-backup-{timestamp}.db.enc"
                 logger.info(
                     "Database backup encrypted: %s -> %s bytes (AES-GCM)",
                     backup_size, len(enc_blob),
@@ -288,7 +288,7 @@ def backup_database():
                 logger.exception("Backup encryption failed; aborting download")
                 return error_response('Backup encryption failed', 500)
         else:
-            filename = f"minuspod-backup-{timestamp}.db"
+            filename = f"sparkypod-backup-{timestamp}.db"
             if encrypt_param and not crypto_available():
                 logger.warning(
                     "Database backup downloaded UNENCRYPTED: "
@@ -349,7 +349,7 @@ def backup_database():
 _SWAGGER_HTML = '''<!DOCTYPE html>
 <html>
 <head>
-    <title>MinusPod API</title>
+    <title>SparkyPod API</title>
     <link rel="stylesheet" type="text/css" href="/ui/swagger/swagger-ui.css">
 </head>
 <body>

@@ -546,7 +546,7 @@ function Settings() {
         </div>
         <div className="flex items-center gap-4 shrink-0">
           <a
-            href="https://github.com/ttlequals0/MinusPod/blob/main/docs/README.md"
+            href="https://github.com/SimpleHonors/sparkypod/blob/main/docs/README.md"
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-primary hover:underline flex items-center gap-1 whitespace-nowrap"

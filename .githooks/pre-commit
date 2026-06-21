@@ -17,7 +17,7 @@ set -euo pipefail
 # Each pattern: regex | short label (shown on hit)
 PATTERNS=(
     'session=eyJ[A-Za-z0-9_-]{20,}|Flask session cookie (signed, contains auth claim)'
-    'minuspod_csrf=[A-Za-z0-9_-]{30,}|MinusPod CSRF token'
+    'minuspod_csrf=[A-Za-z0-9_-]{30,}|SparkyPod CSRF token'
     'sk-ant-[A-Za-z0-9]{16,}|Anthropic API key'
     'sk-proj-[A-Za-z0-9]{16,}|OpenAI project key'
     'xoxb-[A-Za-z0-9-]{16,}|Slack bot token'

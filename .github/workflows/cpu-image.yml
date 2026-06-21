@@ -1,6 +1,6 @@
 name: CPU image (multi-arch)
 
-# Builds and publishes ttlequals0/minuspod:<version>-cpu as a multi-arch
+# Builds and publishes SimpleHonors/sparkypod:<version>-cpu as a multi-arch
 # manifest (linux/amd64 + linux/arm64). The amd64 leg runs on the standard
 # GitHub-hosted runner; the arm64 leg runs on the free native arm64 runner
 # (no QEMU). A final job merges both arch-specific digests into a single
@@ -9,7 +9,7 @@ name: CPU image (multi-arch)
 #
 # Requires repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN.
 #
-# The GPU image (ttlequals0/minuspod:<version>, :latest) is still built
+# The GPU image (SimpleHonors/sparkypod:<version>, :latest) is still built
 # locally via the /build-and-push skill; only the CPU variant is here
 # because NVIDIA's arm64 CUDA images target Jetson, not generic arm servers.
 
@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY_IMAGE: ttlequals0/minuspod
+  REGISTRY_IMAGE: SimpleHonors/sparkypod
 
 jobs:
   build:

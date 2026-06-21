@@ -1,4 +1,4 @@
-# Pre-populated from MinusPod production ad markers.
+# Pre-populated from SparkyPod production ad markers.
 # Verify each ad: check boundaries, confirm text matches transcript.
 # Use the no-ads marker (uncomment) if this episode has no ads:
 # # Verified: no ads in this episode.

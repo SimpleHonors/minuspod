@@ -1,4 +1,4 @@
-"""SQLite database package for MinusPod."""
+"""SQLite database package for SparkyPod."""
 import sqlite3
 import threading
 import logging

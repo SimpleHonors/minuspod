@@ -118,7 +118,7 @@ COPY entrypoint.sh /app/
 
 # Set permissions - use find to recursively set permissions on subdirectories
 # IMPORTANT: glob pattern *.py does NOT match files in subdirectories!
-# Create a non-root minuspod user (UID/GID 1000) that entrypoint.sh drops
+# Create a non-root sparkypod user (UID/GID 1000) that entrypoint.sh drops
 # privileges to via setpriv. The container still starts as root so the
 # entrypoint can chown the data volume on first boot; no app code runs
 # as root. UID/GID are overridable at runtime with APP_UID/APP_GID.
@@ -130,10 +130,10 @@ RUN find ./src -type f -name '*.py' -exec chmod 644 {} \; && \
     mkdir -p /app/data && \
     (getent passwd ubuntu && userdel -r ubuntu 2>/dev/null || true) && \
     (getent group ubuntu && groupdel ubuntu 2>/dev/null || true) && \
-    groupadd --system --gid 1000 minuspod && \
-    useradd --system --uid 1000 --gid minuspod --home-dir /app/data \
-            --shell /sbin/nologin minuspod && \
-    chown -R minuspod:minuspod /app
+    groupadd --system --gid 1000 sparkypod && \
+    useradd --system --uid 1000 --gid sparkypod --home-dir /app/data \
+            --shell /sbin/nologin sparkypod && \
+    chown -R sparkypod:sparkypod /app
 
 # Expose port
 EXPOSE 8000

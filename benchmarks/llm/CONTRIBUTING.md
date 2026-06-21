@@ -1,4 +1,4 @@
-# Contributing to the MinusPod LLM Benchmark
+# Contributing to the SparkyPod LLM Benchmark
 
 Outside contributions are welcome in three shapes:
 
@@ -10,7 +10,7 @@ This doc covers PR mechanics. Background and setup live in [`README.md`](README.
 
 ## Setup
 
-Follow [`README.md`](README.md) for `uv sync`, `.env`, and `benchmark.toml`. The CLI commands are documented under `uv run benchmark --help`. `benchmark capture` requires an account on a MinusPod instance. If you don't run one, file an issue describing the episode you want added and a maintainer will capture it for you.
+Follow [`README.md`](README.md) for `uv sync`, `.env`, and `benchmark.toml`. The CLI commands are documented under `uv run benchmark --help`. `benchmark capture` requires an account on a SparkyPod instance. If you don't run one, file an issue describing the episode you want added and a maintainer will capture it for you.
 
 ## PR type 1: add an episode
 
@@ -18,7 +18,7 @@ Workflow:
 
 ```sh
 cd benchmarks/llm
-uv run benchmark capture --episode-url https://your-minuspod.example.com/ui/feeds/<slug>/episodes/<id>
+uv run benchmark capture --episode-url https://your-sparkypod.example.com/ui/feeds/<slug>/episodes/<id>
 # Edit data/candidates/ep-<slug>-<id>/truth.txt per data/README.md.
 uv run benchmark verify ep-<slug>-<id>
 ```
@@ -26,7 +26,7 @@ uv run benchmark verify ep-<slug>-<id>
 `verify` validates the candidate and promotes it to `data/corpus/`. Your PR diff should contain exactly four files under `data/corpus/ep-<slug>-<id>/`:
 
 - `metadata.toml`: podcast/episode identity plus a sha256 of `segments.json`.
-- `segments.json`: Whisper segments, byte-exact from the MinusPod `original-segments` endpoint.
+- `segments.json`: Whisper segments, byte-exact from the SparkyPod `original-segments` endpoint.
 - `truth.txt`: human-verified ad markers in the format documented in `data/README.md`.
 - `windows.json`: precomputed sliding windows used for scoring.
 

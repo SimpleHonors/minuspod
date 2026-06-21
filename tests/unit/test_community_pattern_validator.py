@@ -181,7 +181,7 @@ def test_validate_doc_accepts_seed_alias_of_declared_sponsor():
 
 
 def test_run_accepts_bundle_file(tmp_path, monkeypatch):
-    """A bundle file with `format == 'minuspod-community-submission'`
+    """A bundle file with `format == 'sparkypod-community-submission'`
     is expanded into N validations, one per pattern in `patterns[]`.
     Each result path is `<file>#patterns[i]` so the PR comment can
     point at the failing index."""
@@ -323,13 +323,13 @@ def test_file_shape_warns_bundle_named_as_per_pattern():
 
 def test_file_shape_warns_per_pattern_named_as_bundle():
     raw = {'community_id': 'abc', 'sponsor': 'Shopify'}
-    warns = _file_shape_warnings('patterns/community/minuspod-submission-xyz.json', raw)
+    warns = _file_shape_warnings('patterns/community/sparkypod-submission-xyz.json', raw)
     assert any('per-pattern' in w.lower() for w in warns)
 
 
 def test_file_shape_silent_on_matching_pairs():
     assert _file_shape_warnings(
-        'patterns/community/minuspod-submission-xyz.json',
+        'patterns/community/sparkypod-submission-xyz.json',
         {'format': BUNDLE_FORMAT, 'patterns': []},
     ) == []
     assert _file_shape_warnings(

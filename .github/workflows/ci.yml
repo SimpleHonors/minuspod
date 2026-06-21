@@ -108,7 +108,7 @@ jobs:
       - name: Audit requirements
         # Ignored advisories carry no upstream fix:
         # - PYSEC-2024-277 (joblib): pickle-deserialization advisory inherent to the
-        #   library; MinusPod only loads joblib artefacts the container itself wrote,
+        #   library; SparkyPod only loads joblib artefacts the container itself wrote,
         #   never user-supplied pickles. Revisit if joblib publishes a fix release.
         # - PYSEC-2025-183 (pyjwt): officially disputed; no PyJWT release resolves it.
         #   We are on the current 2.12.1.

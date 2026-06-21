@@ -334,7 +334,7 @@ class TestRegressionGuards:
     def test_self_closing_locked_falls_back_to_default(self):
         # Spec violation: ``<podcast:locked>`` MUST contain "yes" or "no".
         # When upstream emits self-closing locked with only an owner
-        # attribute, MinusPod must not propagate the empty body; fall back to
+        # attribute, SparkyPod must not propagate the empty body; fall back to
         # the default "yes".
         upstream = _minimal_upstream('<podcast:locked owner="orig@example.com"/>')
         out = _emit(_build_parser(), upstream)

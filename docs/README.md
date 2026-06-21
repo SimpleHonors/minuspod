@@ -1,6 +1,6 @@
-# MinusPod Documentation
+# SparkyPod Documentation
 
-Full documentation for MinusPod. Start with the [project README](../README.md) for a quick install, then come here for the details.
+Full documentation for SparkyPod. Start with the [project README](../README.md) for a quick install, then come here for the details.
 
 ## Contents
 
@@ -15,7 +15,7 @@ Full documentation for MinusPod. Start with the [project README](../README.md) f
 - [Finding Feeds & Usage](feeds-and-usage.md) - podcast search, finding RSS feeds, Audiobookshelf
 - [API & Webhooks](api-and-webhooks.md) - REST endpoints, webhook events, payload templates, signing
 - [Security, Storage & Custom Assets](security-and-storage.md) - remote access, login lockout, backups, custom ad markers
-- [Podcasting 2.0](podcasting-2.0.md) - what MinusPod emits, regenerates, and deliberately strips from the Podcast Namespace, and why
+- [Podcasting 2.0](podcasting-2.0.md) - what SparkyPod emits, regenerates, and deliberately strips from the Podcast Namespace, and why
 - [Deployment Runbook](DEPLOYMENT.md) - operational runbook
 
 [< Project README](../README.md)

@@ -1,4 +1,4 @@
-"""Schema initialization and migration mixin for MinusPod database."""
+"""Schema initialization and migration mixin for SparkyPod database."""
 import fcntl
 import sqlite3
 import logging

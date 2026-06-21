@@ -9,8 +9,8 @@ mkdir -p "$RESULTS_DIR"
 
 LOCAL_BASE="${LOCAL_BASE:-http://localhost:8001}"
 LOCAL_PASSWORD="${LOCAL_PASSWORD:-SmokeTestPass123!}"
-LOCAL_CONTAINER="${LOCAL_CONTAINER:-minuspod-smoke}"
-LOCAL_VOLUME="${LOCAL_VOLUME:-minuspod-smoke-data}"
+LOCAL_CONTAINER="${LOCAL_CONTAINER:-sparkypod-smoke}"
+LOCAL_VOLUME="${LOCAL_VOLUME:-sparkypod-smoke-data}"
 LOCAL_LOG_FILE="${LOCAL_LOG_FILE:-$RESULTS_DIR/local-container.log}"
 
 REMOTE_BASE="${REMOTE_BASE:-https://your-server.example.com}"

@@ -171,7 +171,7 @@ def _prepare_and_dispatch(webhook_config, context, add_test_flag=False,
         sig = hmac.new(
             secret.encode('utf-8'), body_bytes, hashlib.sha256
         ).hexdigest()
-        headers['X-MinusPod-Signature'] = f"sha256={sig}"
+        headers['X-SparkyPod-Signature'] = f"sha256={sig}"
 
     # Webhook URLs are operator-configured (admin-typed), so use
     # OPERATOR_CONFIGURED trust. safe_post revalidates every redirect hop

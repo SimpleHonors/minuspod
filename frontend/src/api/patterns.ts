@@ -306,7 +306,7 @@ export async function downloadCommunityBundle(
   const { blob, filename } = await apiFileRequest('/patterns/submit-bundle', {
     method: 'POST',
     body: overrides ? { ids, overrides } : { ids },
-    fallbackFilename: 'minuspod-community-submission.json',
+    fallbackFilename: 'sparkypod-community-submission.json',
   });
   downloadBlob(blob, filename);
   return { filename };

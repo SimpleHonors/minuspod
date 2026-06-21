@@ -160,7 +160,7 @@ def render(
 ) -> None:
     raw_calls = list(read_jsonl(calls_path))
     if not raw_calls:
-        output_path.write_text("# MinusPod LLM Benchmark Report\n\nNo benchmark data yet. Run `benchmark run` first.\n")
+        output_path.write_text("# SparkyPod LLM Benchmark Report\n\nNo benchmark data yet. Run `benchmark run` first.\n")
         return
     calls = _dedup_last_write_wins(raw_calls)
 
@@ -202,7 +202,7 @@ def render(
 
     body = "\n\n".join(s for s in sections if s) + "\n"
     toc = _build_toc(body)
-    output_path.write_text("# MinusPod LLM Benchmark Report\n\n" + toc + "\n\n" + body)
+    output_path.write_text("# SparkyPod LLM Benchmark Report\n\n" + toc + "\n\n" + body)
 
     assets_dir.mkdir(parents=True, exist_ok=True)
     _render_pareto(active, assets_dir / "pareto.svg")
@@ -613,7 +613,7 @@ def _render_tldr(stats: dict[str, ModelStats], episodes: list[Episode]) -> str:
     lines = ["## TL;DR", "", "### Best Accuracy (F0.5 @ IoU >= 0.5)", ""]
     lines.append(
         "Models ranked by F0.5 (precision weighted 2x recall) against human-verified ground truth. "
-        "MinusPod cuts the segments it flags, so cutting real content (a false positive) is worse than "
+        "SparkyPod cuts the segments it flags, so cutting real content (a false positive) is worse than "
         "leaving an ad in (a false negative), and F0.5 penalizes it more. A model shares the tier above it "
         "unless it scores consistently lower across the same episodes (paired one-sided t-test, 95%); models "
         "that trade wins episode to episode share a tier, so order within a tier is not meaningful on this "
@@ -991,19 +991,19 @@ def _render_methodology(cfg, episodes, *, pricing_snapshot: pricing.PricingSnaps
     lines = [
         "## Methodology",
         "",
-        "Reproducibility settings used for this run. The benchmark sends the same prompts MinusPod sends in production (same system prompt, same sponsor list, same windowing) so the F1 numbers here are directly relevant to production accuracy decisions. Cost is recomputed at report time from token counts against the active pricing snapshot, so all rows compare at the same prices regardless of when the actual call ran.",
+        "Reproducibility settings used for this run. The benchmark sends the same prompts SparkyPod sends in production (same system prompt, same sponsor list, same windowing) so the F1 numbers here are directly relevant to production accuracy decisions. Cost is recomputed at report time from token counts against the active pricing snapshot, so all rows compare at the same prices regardless of when the actual call ran.",
         "",
         f"- Trials per (model, episode): **{cfg.run.trials}**, temperature {cfg.run.temperature}",
-        f"- max_tokens: 4096 (matches MinusPod production)",
+        f"- max_tokens: 4096 (matches SparkyPod production)",
         f"- response_format: {cfg.run.response_format} (with prompt-injection fallback when provider rejects native)",
-        f"- Window size: 10 min, overlap: 3 min (imported from MinusPod's create_windows)",
+        f"- Window size: 10 min, overlap: 3 min (imported from SparkyPod's create_windows)",
         f"- Pricing snapshot: {pricing_snapshot.captured_at}",
         f"- Corpus episodes: {len(episodes)}",
     ]
     return "\n".join(lines)
 
 
-# Whisper configuration used by the production MinusPod instance that supplied
+# Whisper configuration used by the production SparkyPod instance that supplied
 # every transcript in data/corpus/. Hardcoded here because these are production
 # defaults, not benchmark config. If the source instance ever changes, update
 # this table and regenerate the report.
@@ -1030,11 +1030,11 @@ model.transcribe(
 
 
 def _seed_sponsors() -> list[dict] | None:
-    """Pull the SEED_SPONSORS list from MinusPod at render time so the report
+    """Pull the SEED_SPONSORS list from SparkyPod at render time so the report
     reflects whatever's in production today. SEED_SPONSORS is a list of
     {name, aliases, category} dicts. Returns the entries sorted by canonical
     name (case-insensitively). Returns None if the import path isn't
-    available (e.g. running outside a MinusPod checkout)."""
+    available (e.g. running outside a SparkyPod checkout)."""
     try:
         from utils.constants import SEED_SPONSORS  # type: ignore[import-not-found]
     except ImportError:
@@ -1044,7 +1044,7 @@ def _seed_sponsors() -> list[dict] | None:
 
 
 def _sponsor_aliases() -> dict | None:
-    """Pull SPONSOR_ALIASES from MinusPod at render time. This is the
+    """Pull SPONSOR_ALIASES from SparkyPod at render time. This is the
     post-transcription mishearing-correction map (`a firm` -> `Affirm`),
     distinct from the canonical-aliases field on each SEED_SPONSORS entry.
     Returns None if the import fails."""
@@ -1059,7 +1059,7 @@ def _render_transcript_source() -> str:
     lines = [
         "## Transcript source",
         "",
-        "`segments.json` for every corpus episode is pulled byte-exact from the source MinusPod instance's `original-segments` endpoint. The transcript itself was generated by faster-whisper inside that instance, not by the benchmark. Model choice and decoding params affect what gets transcribed, which sets an upper bound on what every benchmarked LLM can find.",
+        "`segments.json` for every corpus episode is pulled byte-exact from the source SparkyPod instance's `original-segments` endpoint. The transcript itself was generated by faster-whisper inside that instance, not by the benchmark. Model choice and decoding params affect what gets transcribed, which sets an upper bound on what every benchmarked LLM can find.",
         "",
         "**Whisper config:**",
         "",
@@ -1081,7 +1081,7 @@ def _render_transcript_source() -> str:
     ]
     sponsors = _seed_sponsors()
     if sponsors is None:
-        lines.append("**Sponsor vocabulary:** [unable to import `SEED_SPONSORS` from MinusPod at render time]")
+        lines.append("**Sponsor vocabulary:** [unable to import `SEED_SPONSORS` from SparkyPod at render time]")
     else:
         with_aliases = sum(1 for s in sponsors if s.get("aliases"))
         total_aliases = sum(len(s.get("aliases") or []) for s in sponsors)
@@ -1101,7 +1101,7 @@ def _render_transcript_source() -> str:
     aliases_map = _sponsor_aliases()
     if aliases_map is None:
         lines.append("")
-        lines.append("**Mishearing corrections:** [unable to import `SPONSOR_ALIASES` from MinusPod at render time]")
+        lines.append("**Mishearing corrections:** [unable to import `SPONSOR_ALIASES` from SparkyPod at render time]")
     else:
         lines += [
             "",

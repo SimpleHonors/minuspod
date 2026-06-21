@@ -1,4 +1,4 @@
-"""Full-text search mixin for MinusPod database."""
+"""Full-text search mixin for SparkyPod database."""
 import logging
 from typing import Optional, Dict, List
 

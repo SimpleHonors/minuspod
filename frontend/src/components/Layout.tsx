@@ -80,7 +80,7 @@ function Layout() {
               <Link to="/" className="flex items-center">
                 <img
                   src={theme === 'dark' ? '/ui/logo-dark.svg' : '/ui/logo.svg'}
-                  alt="MinusPod"
+                  alt="SparkyPod"
                   className="h-8"
                 />
               </Link>

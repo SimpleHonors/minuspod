@@ -6,11 +6,11 @@
 
 ## Whisper / Transcription
 
-By default, MinusPod uses faster-whisper with a local NVIDIA GPU for transcription. If you don't have an NVIDIA GPU (e.g. Apple Silicon Mac), you can use any OpenAI-compatible whisper API as the transcription backend.
+By default, SparkyPod uses faster-whisper with a local NVIDIA GPU for transcription. If you don't have an NVIDIA GPU (e.g. Apple Silicon Mac), you can use any OpenAI-compatible whisper API as the transcription backend.
 
 ### GPU Compute Type
 
-faster-whisper runs on CTranslate2, which only supports certain compute types per GPU generation. MinusPod exposes `WHISPER_COMPUTE_TYPE` as an env var and as a dropdown in Settings > Transcription. The default `auto` picks `float16` on CUDA and `int8` on CPU, matching the prior hardcoded behavior. If `float16` fails at model init (common on Pascal GTX 10xx and Maxwell GTX 9xx, which cannot do fp16 math in CTranslate2), the server retries `int8_float16`, then `int8`, then `float32` and logs the final active type. Any other explicit choice that fails is raised instead of silently masked.
+faster-whisper runs on CTranslate2, which only supports certain compute types per GPU generation. SparkyPod exposes `WHISPER_COMPUTE_TYPE` as an env var and as a dropdown in Settings > Transcription. The default `auto` picks `float16` on CUDA and `int8` on CPU, matching the prior hardcoded behavior. If `float16` fails at model init (common on Pascal GTX 10xx and Maxwell GTX 9xx, which cannot do fp16 math in CTranslate2), the server retries `int8_float16`, then `int8`, then `float32` and logs the final active type. Any other explicit choice that fails is raised instead of silently masked.
 
 Pick a value that matches your GPU:
 
@@ -48,7 +48,7 @@ Other models are available: replace `large-v3-turbo` with `tiny`, `base`, `small
 docker compose -f docker-compose.whisper.yml up -d
 ```
 
-**3. Configure MinusPod** (`.env` or `docker-compose.yml`):
+**3. Configure SparkyPod** (`.env` or `docker-compose.yml`):
 
 ```bash
 WHISPER_BACKEND=openai-api
@@ -56,9 +56,9 @@ WHISPER_API_BASE_URL=http://whisper-server:8765/v1
 WHISPER_DEVICE=cpu
 ```
 
-If MinusPod and whisper-server are on the same Docker network, use the container name (`whisper-server`). If they are on separate hosts, use the host IP and the exposed port (`http://your-server:8765/v1`).
+If SparkyPod and whisper-server are on the same Docker network, use the container name (`whisper-server`). If they are on separate hosts, use the host IP and the exposed port (`http://your-server:8765/v1`).
 
-The `--dtw large.v3.turbo` flag enables word-level timestamps for precise ad boundary detection. On CUDA GPUs, `--no-flash-attn` is required alongside `--dtw`. Flash attention silently disables DTW, causing word-level timestamps to be missing from the API response. On Apple Silicon (Metal), this flag is not needed. `WHISPER_DEVICE=cpu` prevents MinusPod from attempting to initialize a local CUDA GPU. MinusPod already preprocesses audio to 16kHz mono WAV before sending it to the API, so the whisper.cpp `--convert` flag is not needed.
+The `--dtw large.v3.turbo` flag enables word-level timestamps for precise ad boundary detection. On CUDA GPUs, `--no-flash-attn` is required alongside `--dtw`. Flash attention silently disables DTW, causing word-level timestamps to be missing from the API response. On Apple Silicon (Metal), this flag is not needed. `WHISPER_DEVICE=cpu` prevents SparkyPod from attempting to initialize a local CUDA GPU. SparkyPod already preprocesses audio to 16kHz mono WAV before sending it to the API, so the whisper.cpp `--convert` flag is not needed.
 
 > **Warning:** If you add `--convert` for use with other clients, be aware that whisper.cpp writes temporary converted files to the current working directory. In Docker, the default CWD may not be writable, causing whisper.cpp to silently return empty transcription results (200 with 0 segments). Set `working_dir: /tmp` in your compose file or mount a writable volume if you need `--convert`.
 
@@ -79,7 +79,7 @@ cd whisper.cpp && make -j
   --inference-path /v1/audio/transcriptions \
   --dtw large.v3.turbo
 
-# Configure MinusPod
+# Configure SparkyPod
 WHISPER_BACKEND=openai-api
 WHISPER_API_BASE_URL=http://host.docker.internal:8765/v1
 WHISPER_DEVICE=cpu

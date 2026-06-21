@@ -1,4 +1,4 @@
-"""Statistics and token usage mixin for MinusPod database."""
+"""Statistics and token usage mixin for SparkyPod database."""
 import logging
 from typing import Dict, List, Optional, Tuple
 

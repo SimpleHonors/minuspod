@@ -1,4 +1,4 @@
-"""Sponsor management mixin for MinusPod database."""
+"""Sponsor management mixin for SparkyPod database."""
 import json
 import logging
 from typing import Optional, Dict, List

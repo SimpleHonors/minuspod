@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decrypt a MinusPod encrypted backup file (``*.db.enc``).
+"""Decrypt a SparkyPod encrypted backup file (``*.db.enc``).
 
 Usage::
 

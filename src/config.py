@@ -411,8 +411,8 @@ DEFAULT_OPENAI_BASE_URL = 'http://localhost:8000/v1'
 
 # OpenRouter API
 OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
-OPENROUTER_HTTP_REFERER = 'https://github.com/ttlequals0/minuspod'
-OPENROUTER_APP_TITLE = 'MinusPod'
+OPENROUTER_HTTP_REFERER = 'https://github.com/SimpleHonors/sparkypod'
+OPENROUTER_APP_TITLE = 'SparkyPod'
 
 # OpenRouter router aliases. These are valid model IDs that route dynamically
 # but are not returned by /api/v1/models, so they never show up in the model

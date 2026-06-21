@@ -93,7 +93,7 @@ function CommunityPatternsSection() {
             </span>
           </label>
           <p className="text-sm text-muted-foreground -mt-2">
-            Pulls a curated list of common-sponsor patterns from the MinusPod
+            Pulls a curated list of common-sponsor patterns from the SparkyPod
             GitHub repository so a fresh install gets coverage without having
             to build a library from scratch. Off by default; opt in here.
           </p>

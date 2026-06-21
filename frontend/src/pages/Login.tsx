@@ -48,7 +48,7 @@ function Login() {
           <div className="text-center mb-8">
             <img
               src={theme === 'dark' ? '/ui/logo-dark.svg' : '/ui/logo.svg'}
-              alt="MinusPod"
+              alt="SparkyPod"
               className="h-10 mx-auto"
             />
             <p className="text-sm text-muted-foreground mt-2">Enter password to continue</p>

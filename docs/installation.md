@@ -63,7 +63,7 @@ Reuse the same `.env` and `data/` directory as the Quick Start, then:
 docker compose -f docker-compose.cpu.yml up -d
 ```
 
-That pulls `ttlequals0/minuspod:cpu` (the floating CPU tag). To pin a specific release, set `MINUSPOD_VERSION=2.8.13-cpu` in your `.env`. The `:latest` tag always points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag.
+That pulls `SimpleHonors/sparkypod:cpu` (the floating CPU tag). To pin a specific release, set `MINUSPOD_VERSION=2.8.13-cpu` in your `.env`. The `:latest` tag always points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag.
 
 Local CPU transcription with `faster-whisper` is slow on amd64 and slower on arm64. For anything beyond a quick test, offload Whisper to a remote API in your `.env`:
 
@@ -85,18 +85,18 @@ Two knobs, smallest change first:
 1. Cap the OpenMP thread pool to your P-core count. This alone removes the oversubscription:
 
    ```bash
-   docker run -e OMP_NUM_THREADS=8 ... ttlequals0/minuspod:cpu
+   docker run -e OMP_NUM_THREADS=8 ... SimpleHonors/sparkypod:cpu
    ```
 
 2. Pin the container to the P-cores so the scheduler cannot push work onto E-cores. Find the P-core ids with `lscpu --all --extended` (the higher-clocked cores), then:
 
    ```bash
    # Docker
-   docker run -e OMP_NUM_THREADS=8 --cpuset-cpus=0-11 ... ttlequals0/minuspod:cpu
+   docker run -e OMP_NUM_THREADS=8 --cpuset-cpus=0-11 ... SimpleHonors/sparkypod:cpu
    ```
 
    ```ini
-   # Podman Quadlet (minuspod.container)
+   # Podman Quadlet (sparkypod.container)
    [Container]
    Environment=OMP_NUM_THREADS=8
    CPUSetCPUs=0-11

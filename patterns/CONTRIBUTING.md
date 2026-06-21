@@ -6,7 +6,7 @@ This explains what happens when you submit a pattern, what gets stripped before 
 
 ## What is a community pattern
 
-A community pattern is an ad pattern from your local MinusPod instance that you've chosen to share. Once accepted, it ships to other MinusPod users via the periodic sync. You retain everything you had locally. Submission is a copy, not a move.
+A community pattern is an ad pattern from your local SparkyPod instance that you've chosen to share. Once accepted, it ships to other SparkyPod users via the periodic sync. You retain everything you had locally. Submission is a copy, not a move.
 
 -----
 
@@ -16,7 +16,7 @@ When you pick **Submit to community** in the Export dialog, the app runs quality
 
 ```json
 {
-  "format": "minuspod-community-submission",
+  "format": "sparkypod-community-submission",
   "bundle_version": 1,
   "submitted_at": "...",
   "submitted_app_version": "2.4.5",
@@ -91,8 +91,8 @@ When a check fails, the app shows which one and does not generate a submission.
 ## What happens after you click submit
 
 1. The app runs the quality gates and shows a preview: how many patterns will pass, and the reasons for any rejections.
-1. You confirm; `minuspod-submission-<id>.json` downloads to your machine.
-1. You fork `ttlequals0/MinusPod`, drop the file into `patterns/community/` on a new branch, commit, push, and open a PR. A CLI snippet is shown right after the download.
+1. You confirm; `sparkypod-submission-<id>.json` downloads to your machine.
+1. You fork `SimpleHonors/sparkypod`, drop the file into `patterns/community/` on a new branch, commit, push, and open a PR. A CLI snippet is shown right after the download.
 1. The GitHub Action validates the bundle (one validation per entry).
 1. A maintainer reviews the PR.
 1. If accepted, every pattern in the bundle joins the next published manifest and reaches other instances on their next sync.
@@ -155,16 +155,16 @@ This process is new and not set in stone. Open an issue if you have ideas to imp
 - Names of podcasts you listen to
 - Episode information
 - Any metric about your listening habits
-- Any local config from your MinusPod instance
+- Any local config from your SparkyPod instance
 - Anything that could deanonymize you across submissions
 
-The only personally-attributable trace is the GitHub PR itself, opened from your GitHub account. For anonymity at the GitHub level, use an account that is not tied to your identity. MinusPod does not handle this.
+The only personally-attributable trace is the GitHub PR itself, opened from your GitHub account. For anonymity at the GitHub level, use an account that is not tied to your identity. SparkyPod does not handle this.
 
 -----
 
 ## Questions or issues
 
-Open an issue on the main MinusPod repo if:
+Open an issue on the main SparkyPod repo if:
 
 - A PII pattern is being missed by the strip rules
 - A tag in the vocabulary needs a change
@@ -188,8 +188,8 @@ hint a reviewer browsing `patterns/community/` has about what a file
 contains. If a contributor edits the `sponsor` field after export, the file
 must be renamed too.
 
-Bundle files (`format: "minuspod-community-submission"`) follow the
-`minuspod-submission-<id>.json` convention instead. The validator warns
+Bundle files (`format: "sparkypod-community-submission"`) follow the
+`sparkypod-submission-<id>.json` convention instead. The validator warns
 when these two shapes are mixed up.
 
 ## Variant truncation warnings

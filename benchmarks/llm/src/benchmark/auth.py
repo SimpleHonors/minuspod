@@ -1,4 +1,4 @@
-"""MinusPod cookie auth + cached session."""
+"""SparkyPod cookie auth + cached session."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from .config import MinusPodConfig, secret
+from .config import SparkyPodConfig, secret
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class AuthError(RuntimeError):
     pass
 
 
-def acquire(cfg: MinusPodConfig, *, force_login: bool = False) -> Session:
+def acquire(cfg: SparkyPodConfig, *, force_login: bool = False) -> Session:
     cache = cfg.session_cache_path
     if not force_login and cache.is_file():
         try:
@@ -65,7 +65,7 @@ def _probe(base_url: str, cookies: dict[str, str]) -> bool:
         return False
 
 
-def _login(cfg: MinusPodConfig) -> Session:
+def _login(cfg: SparkyPodConfig) -> Session:
     password = secret(cfg.password_env)
     r = httpx.post(
         f"{cfg.base_url.rstrip('/')}/api/v1/auth/login",

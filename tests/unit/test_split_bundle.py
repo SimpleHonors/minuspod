@@ -40,7 +40,7 @@ def _pattern(sponsor, community_id):
 
 
 def test_split_writes_one_file_per_entry(tmp_path):
-    bundle_path = tmp_path / 'minuspod-submission-abc.json'
+    bundle_path = tmp_path / 'sparkypod-submission-abc.json'
     bundle_path.write_text(json.dumps(_bundle(
         _pattern('Shopify', '07df78ed-9b7f-4600-a9b7-1aee45b5bfc7'),
         _pattern('Grubhub', '919a1600-268d-4f93-9ae1-73db5f3dab1f'),
@@ -52,7 +52,7 @@ def test_split_writes_one_file_per_entry(tmp_path):
 
 
 def test_split_keep_original_flag(tmp_path):
-    bundle_path = tmp_path / 'minuspod-submission-abc.json'
+    bundle_path = tmp_path / 'sparkypod-submission-abc.json'
     bundle_path.write_text(json.dumps(_bundle(
         _pattern('Shopify', '07df78ed-9b7f-4600-a9b7-1aee45b5bfc7'),
     )))
@@ -61,7 +61,7 @@ def test_split_keep_original_flag(tmp_path):
 
 
 def test_split_refuses_to_overwrite_existing_per_pattern(tmp_path):
-    bundle_path = tmp_path / 'minuspod-submission-abc.json'
+    bundle_path = tmp_path / 'sparkypod-submission-abc.json'
     bundle_path.write_text(json.dumps(_bundle(
         _pattern('Shopify', '07df78ed-9b7f-4600-a9b7-1aee45b5bfc7'),
     )))
@@ -86,7 +86,7 @@ def test_split_rejects_non_bundle(tmp_path):
 
 
 def test_split_rejects_empty_bundle(tmp_path):
-    bundle_path = tmp_path / 'minuspod-submission-empty.json'
+    bundle_path = tmp_path / 'sparkypod-submission-empty.json'
     bundle_path.write_text(json.dumps(_bundle()))  # no patterns
     try:
         split(bundle_path)
@@ -101,7 +101,7 @@ def test_split_rejects_intra_run_filename_collision(tmp_path):
     # Two entries share a sponsor and the same first UUID segment, so both map
     # to the same filename. The pre-write check must catch the in-run collision
     # (not just on-disk) so neither overwrites the other.
-    bundle_path = tmp_path / 'minuspod-submission-abc.json'
+    bundle_path = tmp_path / 'sparkypod-submission-abc.json'
     bundle_path.write_text(json.dumps(_bundle(
         _pattern('Shopify', '07df78ed-1111-4600-a9b7-1aee45b5bfc7'),
         _pattern('Shopify', '07df78ed-2222-4600-a9b7-1aee45b5bfc7'),
@@ -117,7 +117,7 @@ def test_split_rejects_intra_run_filename_collision(tmp_path):
 
 
 def test_split_atomic_multi_pattern_collision(tmp_path):
-    bundle_path = tmp_path / 'minuspod-submission-abc.json'
+    bundle_path = tmp_path / 'sparkypod-submission-abc.json'
     bundle_path.write_text(json.dumps(_bundle(
         _pattern('Shopify', '07df78ed-9b7f-4600-a9b7-1aee45b5bfc7'),
         _pattern('Grubhub', '919a1600-268d-4f93-9ae1-73db5f3dab1f'),

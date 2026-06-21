@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generate smoke/fixtures/tiny-episode.mp3 if missing. Requires ffmpeg
-# (installed by default in the production minuspod image; on a dev host
+# (installed by default in the production sparkypod image; on a dev host
 # install via `apt install ffmpeg`).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

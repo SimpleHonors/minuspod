@@ -115,7 +115,7 @@ function PatternExportDialogImpl({ patterns, onClose }: Omit<Props, 'open'>) {
     const url = `/api/v1/patterns/export?${params.toString()}`;
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'minuspod-patterns.json';
+    a.download = 'sparkypod-patterns.json';
     a.click();
     onClose();
   }
@@ -186,7 +186,7 @@ function PatternExportDialogImpl({ patterns, onClose }: Omit<Props, 'open'>) {
             <span>
               <span className="font-medium">Download as JSON</span>
               <span className="block text-xs text-muted-foreground">
-                One bundle file you can import into another MinusPod instance.
+                One bundle file you can import into another SparkyPod instance.
               </span>
             </span>
           </label>
@@ -447,7 +447,7 @@ function CommunityPreview({
 
 function CommunityDone({ filename, onClose }: { filename: string; onClose: () => void }) {
   const snippet = [
-    '# 1. Fork ttlequals0/MinusPod and clone your fork',
+    '# 1. Fork SimpleHonors/sparkypod and clone your fork',
     '# 2. Drop the file into patterns/community/, then:',
     `mv ~/Downloads/${filename} patterns/community/`,
     'git checkout -b community-submission',

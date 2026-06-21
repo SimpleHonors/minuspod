@@ -17,7 +17,7 @@ the transcript cannot.
 
 ## Why the pipeline can already take this signal
 
-MinusPod runs ffmpeg in several places today and already feeds non-transcript
+SparkyPod runs ffmpeg in several places today and already feeds non-transcript
 audio signals to the language model:
 
 - `src/audio_analysis/volume_analyzer.py` runs `ffmpeg ... -af ebur128` for

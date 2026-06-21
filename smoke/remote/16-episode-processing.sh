@@ -112,6 +112,6 @@ mp3_code=$(http_code "$REMOTE_BASE/episodes/$feed_id/$ep_id.mp3")
 assert_in "$mp3_code" "200 206 304 404" "MP3 endpoint reachable (got $mp3_code)"
 
 note 'log scan for this window: orchestrator should run Grafana MCP query'
-note '  {container="minuspod"} |~ "ERROR" - filter by smoke timestamp range'
+note '  {container="sparkypod"} |~ "ERROR" - filter by smoke timestamp range'
 
 finish_test "R-T16-episode-processing"

@@ -2,9 +2,9 @@
 in `<podcast:transcript>` or `<podcast:chapters>` tags.
 
 Background: 2.5.4 introduced a per-episode passthrough that emitted
-upstream publisher URLs for any episode MinusPod had not yet
-processed. This violated the core MinusPod contract (subscribers must
-reach MinusPod for all content, never the publisher). 2.5.5 reverted
+upstream publisher URLs for any episode SparkyPod had not yet
+processed. This violated the core SparkyPod contract (subscribers must
+reach SparkyPod for all content, never the publisher). 2.5.5 reverted
 that change. These tests fail loudly if the regression is reintroduced.
 """
 import re
@@ -90,13 +90,13 @@ class TestUnprocessedEpisodeDoesNotLeakUpstream:
         assert "<podcast:chapters" not in served
 
 
-class TestProcessedEpisodeEmitsMinusPodUrl:
+class TestProcessedEpisodeEmitsSparkyPodUrl:
     def test_cached_vtt_emits_minuspod_url_not_upstream(self):
         out = _serve(has_vtt=True, has_chapters=False)
         urls = re.findall(r'<podcast:transcript[^>]*url="([^"]+)"', out)
         assert len(urls) >= 1
         for url in urls:
-            assert _netloc(url) == MINUSPOD_NETLOC, f"tag did not point at MinusPod: {url}"
+            assert _netloc(url) == MINUSPOD_NETLOC, f"tag did not point at SparkyPod: {url}"
             assert _netloc(url) != UPSTREAM_NETLOC
 
     def test_cached_chapters_emits_minuspod_url_not_upstream(self):
@@ -104,5 +104,5 @@ class TestProcessedEpisodeEmitsMinusPodUrl:
         urls = re.findall(r'<podcast:chapters[^>]*url="([^"]+)"', out)
         assert len(urls) >= 1
         for url in urls:
-            assert _netloc(url) == MINUSPOD_NETLOC, f"tag did not point at MinusPod: {url}"
+            assert _netloc(url) == MINUSPOD_NETLOC, f"tag did not point at SparkyPod: {url}"
             assert _netloc(url) != UPSTREAM_NETLOC

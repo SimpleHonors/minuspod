@@ -130,7 +130,7 @@ def test_pr_url_fits_for_typical_pattern():
     url, filename, too_large = build_pr_url(payload)
     assert filename.startswith('squarespace-')
     assert filename.endswith('.json')
-    assert url.startswith('https://github.com/ttlequals0/MinusPod/new/main/patterns/community')
+    assert url.startswith('https://github.com/SimpleHonors/sparkypod/new/main/patterns/community')
     assert too_large is False
 
 

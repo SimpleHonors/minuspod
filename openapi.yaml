@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: MinusPod API
+  title: SparkyPod API
   description: |
     REST API for managing podcast feeds with automatic ad detection and removal.
 
@@ -14,7 +14,7 @@ info:
     - Submit corrections to improve ad detection accuracy
   version: 2.16.0
   contact:
-    name: MinusPod
+    name: SparkyPod
   license:
     name: MIT
 
@@ -367,12 +367,12 @@ paths:
       description: |
         Export all subscribed podcast feeds as an OPML XML file.
         Use mode=original for upstream source URLs (backup/migration).
-        Use mode=modified for MinusPod-served ad-free feed URLs (import into podcast apps).
+        Use mode=modified for SparkyPod-served ad-free feed URLs (import into podcast apps).
       operationId: exportOpml
       parameters:
         - name: mode
           in: query
-          description: 'URL mode: "original" for upstream source URLs, "modified" for MinusPod ad-free feed URLs'
+          description: 'URL mode: "original" for upstream source URLs, "modified" for SparkyPod ad-free feed URLs'
           schema:
             type: string
             enum: [original, modified]
@@ -384,7 +384,7 @@ paths:
             Content-Disposition:
               schema:
                 type: string
-              description: 'Attachment filename, e.g. attachment; filename="minuspod-feeds.opml"'
+              description: 'Attachment filename, e.g. attachment; filename="sparkypod-feeds.opml"'
           content:
             application/xml:
               schema:
@@ -3708,7 +3708,7 @@ paths:
             Content-Disposition:
               schema:
                 type: string
-              description: 'Attachment filename, e.g. attachment; filename="minuspod-backup-2026-03-12.db"'
+              description: 'Attachment filename, e.g. attachment; filename="sparkypod-backup-2026-03-12.db"'
           content:
             application/octet-stream:
               schema:
@@ -4333,7 +4333,7 @@ paths:
           headers:
             Content-Disposition:
               schema: { type: string }
-              description: 'attachment; filename="minuspod-submission-XXXX.json"'
+              description: 'attachment; filename="sparkypod-submission-XXXX.json"'
             X-Bundle-Pattern-Count:
               schema: { type: integer }
             X-Bundle-Rejected-Count:
@@ -4343,7 +4343,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  format: { type: string, example: minuspod-community-submission }
+                  format: { type: string, example: sparkypod-community-submission }
                   bundle_version: { type: integer }
                   submitted_at: { type: string, format: date-time }
                   submitted_app_version: { type: string }

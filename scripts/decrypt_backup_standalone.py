@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Standalone MinusPod backup decrypter.
+"""Standalone SparkyPod backup decrypter.
 
-Decrypts a MinusPod backup envelope (``*.db.enc``) without needing the
-MinusPod source code installed. Reads the per-instance salt from any
+Decrypts a SparkyPod backup envelope (``*.db.enc``) without needing the
+SparkyPod source code installed. Reads the per-instance salt from any
 SQLite file from the same instance (the running DB, or any already-
 decrypted backup from that instance).
 
@@ -58,7 +58,7 @@ def read_salt(db_path: Path) -> bytes:
         conn.close()
     if not row or not row[0]:
         raise ValueError(
-            f"{db_path} has no {SALT_KEY!r} row; not a MinusPod DB or pre-crypto version"
+            f"{db_path} has no {SALT_KEY!r} row; not a SparkyPod DB or pre-crypto version"
         )
     return base64.b64decode(row[0])
 
@@ -77,7 +77,7 @@ def derive_dek(passphrase: str, salt: bytes) -> bytes:
 def decrypt_envelope(envelope: bytes, dek: bytes) -> bytes:
     """Reverse of the MPBK01 envelope: magic + nonce + ciphertext+tag."""
     if not envelope.startswith(BACKUP_MAGIC):
-        raise ValueError("not a MinusPod encrypted-backup envelope (magic mismatch)")
+        raise ValueError("not a SparkyPod encrypted-backup envelope (magic mismatch)")
     body = envelope[len(BACKUP_MAGIC):]
     if len(body) < NONCE_LEN + 16:
         raise ValueError("envelope too short; file may be truncated")
@@ -88,7 +88,7 @@ def decrypt_envelope(envelope: bytes, dek: bytes) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Decrypt a MinusPod encrypted backup without the MinusPod source tree"
+        description="Decrypt a SparkyPod encrypted backup without the SparkyPod source tree"
     )
     parser.add_argument("input", type=Path, help="encrypted backup file (*.db.enc)")
     parser.add_argument("output", type=Path, help="where to write the decrypted SQLite file")

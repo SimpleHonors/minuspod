@@ -1,4 +1,4 @@
-"""Ad patterns and corrections mixin for MinusPod database."""
+"""Ad patterns and corrections mixin for SparkyPod database."""
 import json
 import logging
 from typing import Optional, Dict, List

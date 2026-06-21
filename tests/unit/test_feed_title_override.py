@@ -1,6 +1,6 @@
 """Per-feed title override (#375).
 
-A MinusPod-processed feed otherwise shows the exact source title in podcast
+A SparkyPod-processed feed otherwise shows the exact source title in podcast
 apps, so it's easy to tap the ad-laden original. title_override lets a user
 rename a feed; the rename must actually replace the channel title in the
 SERVED RSS, survive RSS refreshes, and fall back to the source title when

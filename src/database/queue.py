@@ -1,4 +1,4 @@
-"""Auto-process queue mixin for MinusPod database."""
+"""Auto-process queue mixin for SparkyPod database."""
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Tuple
