@@ -79,6 +79,16 @@ function Settings() {
     freqMaxHz: 8000,
     prominenceDb: 9,
     minConfidence: 0.8,
+    templateScore: 0.75,
+    createFromPairs: false,
+    snapConfidence: 0.8,
+    captureMinSeconds: 0.2,
+    captureMaxSeconds: 10,
+    captureMaxIntroSeconds: 60,
+    captureMaxOutroSeconds: 60,
+    pairConfidence: 0.85,
+    pairMinBreakSeconds: 30,
+    pairMaxBreakSeconds: 480,
   });
   const [positionalPriorEnabled, setPositionalPriorEnabled] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
@@ -88,6 +98,8 @@ function Settings() {
   const [maxFeedEpisodes, setMaxFeedEpisodes] = useState(0);
   const [onlyExposeProcessedDefault, setOnlyExposeProcessedDefault] = useState(false);
   const [audioBitrate, setAudioBitrate] = useState('');
+  const [audioNormalizeEnabled, setAudioNormalizeEnabled] = useState(false);
+  const [audioNormalizeIntensity, setAudioNormalizeIntensity] = useState('normal');
   const [skipFlacCompression, setSkipFlacCompression] = useState(false);
   const [vttTranscriptsEnabled, setVttTranscriptsEnabled] = useState(false);
   const [chaptersEnabled, setChaptersEnabled] = useState(false);
@@ -102,6 +114,9 @@ function Settings() {
   });
   const [whisperLanguage, setWhisperLanguage] = useState('');
   const [whisperComputeType, setWhisperComputeType] = useState('');
+  const [transcribeMaxChunkSeconds, setTranscribeMaxChunkSeconds] = useState(600);
+  const [transcribeConcurrentChunks, setTranscribeConcurrentChunks] = useState(4);
+  const [transcribeChunkOverlapSeconds, setTranscribeChunkOverlapSeconds] = useState(30);
   const [providersState, setProvidersState] = useState<ProvidersResponse | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
@@ -301,6 +316,8 @@ function Settings() {
       setMaxFeedEpisodes(settings.maxFeedEpisodes?.value ?? d.maxFeedEpisodes);
       setOnlyExposeProcessedDefault(settings.onlyExposeProcessedDefault?.value ?? d.onlyExposeProcessedDefault);
       setAudioBitrate(settings.audioBitrate?.value || d.audioBitrate);
+      setAudioNormalizeEnabled(settings.audioNormalizeEnabled?.value ?? d.audioNormalizeEnabled);
+      setAudioNormalizeIntensity(settings.audioNormalizeIntensity?.value || d.audioNormalizeIntensity);
       setSkipFlacCompression(settings.skipFlacCompression?.value ?? d.skipFlacCompression);
       setAudioCue({
         enabled: settings.audioCueDetectionEnabled?.value ?? d.audioCueDetectionEnabled,
@@ -308,6 +325,16 @@ function Settings() {
         freqMaxHz: settings.audioCueFreqMaxHz?.value ?? d.audioCueFreqMaxHz,
         prominenceDb: settings.audioCueProminenceDb?.value ?? d.audioCueProminenceDb,
         minConfidence: settings.audioCueMinConfidence?.value ?? d.audioCueMinConfidence,
+        templateScore: settings.audioCueTemplateScore?.value ?? d.audioCueTemplateScore ?? 0.75,
+        createFromPairs: settings.audioCueCreateFromPairs?.value ?? d.audioCueCreateFromPairs ?? false,
+        snapConfidence: settings.audioCueSnapConfidence?.value ?? d.audioCueSnapConfidence ?? 0.8,
+        captureMinSeconds: settings.audioCueCaptureMinSeconds?.value ?? d.audioCueCaptureMinSeconds ?? 0.2,
+        captureMaxSeconds: settings.audioCueCaptureMaxSeconds?.value ?? d.audioCueCaptureMaxSeconds ?? 10,
+        captureMaxIntroSeconds: settings.audioCueCaptureMaxIntroSeconds?.value ?? d.audioCueCaptureMaxIntroSeconds ?? 60,
+        captureMaxOutroSeconds: settings.audioCueCaptureMaxOutroSeconds?.value ?? d.audioCueCaptureMaxOutroSeconds ?? 60,
+        pairConfidence: settings.audioCuePairConfidence?.value ?? d.audioCuePairConfidence ?? 0.85,
+        pairMinBreakSeconds: settings.audioCuePairMinBreakSeconds?.value ?? d.audioCuePairMinBreakSeconds ?? 30,
+        pairMaxBreakSeconds: settings.audioCuePairMaxBreakSeconds?.value ?? d.audioCuePairMaxBreakSeconds ?? 480,
       });
       setPositionalPriorEnabled(
         settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled);
@@ -324,6 +351,9 @@ function Settings() {
       });
       setWhisperLanguage(settings.whisperLanguage?.value || d.whisperLanguage);
       setWhisperComputeType(settings.whisperComputeType?.value || d.whisperComputeType);
+      setTranscribeMaxChunkSeconds(settings.transcribeMaxChunkSeconds?.value ?? 600);
+      setTranscribeConcurrentChunks(settings.transcribeConcurrentChunks?.value ?? 4);
+      setTranscribeChunkOverlapSeconds(settings.transcribeChunkOverlapSeconds?.value ?? 30);
     }
   }
 
@@ -358,6 +388,16 @@ function Settings() {
     if (audioCue.freqMaxHz !== (settings.audioCueFreqMaxHz?.value ?? d.audioCueFreqMaxHz)) payload.audioCueFreqMaxHz = audioCue.freqMaxHz;
     if (audioCue.prominenceDb !== (settings.audioCueProminenceDb?.value ?? d.audioCueProminenceDb)) payload.audioCueProminenceDb = audioCue.prominenceDb;
     if (audioCue.minConfidence !== (settings.audioCueMinConfidence?.value ?? d.audioCueMinConfidence)) payload.audioCueMinConfidence = audioCue.minConfidence;
+    if (audioCue.templateScore !== (settings.audioCueTemplateScore?.value ?? d.audioCueTemplateScore ?? 0.75)) payload.audioCueTemplateScore = audioCue.templateScore;
+    if (audioCue.createFromPairs !== (settings.audioCueCreateFromPairs?.value ?? d.audioCueCreateFromPairs ?? false)) payload.audioCueCreateFromPairs = audioCue.createFromPairs;
+    if (audioCue.snapConfidence !== (settings.audioCueSnapConfidence?.value ?? d.audioCueSnapConfidence ?? 0.8)) payload.audioCueSnapConfidence = audioCue.snapConfidence;
+    if (audioCue.captureMinSeconds !== (settings.audioCueCaptureMinSeconds?.value ?? d.audioCueCaptureMinSeconds ?? 0.2)) payload.audioCueCaptureMinSeconds = audioCue.captureMinSeconds;
+    if (audioCue.captureMaxSeconds !== (settings.audioCueCaptureMaxSeconds?.value ?? d.audioCueCaptureMaxSeconds ?? 10)) payload.audioCueCaptureMaxSeconds = audioCue.captureMaxSeconds;
+    if (audioCue.captureMaxIntroSeconds !== (settings.audioCueCaptureMaxIntroSeconds?.value ?? d.audioCueCaptureMaxIntroSeconds ?? 60)) payload.audioCueCaptureMaxIntroSeconds = audioCue.captureMaxIntroSeconds;
+    if (audioCue.captureMaxOutroSeconds !== (settings.audioCueCaptureMaxOutroSeconds?.value ?? d.audioCueCaptureMaxOutroSeconds ?? 60)) payload.audioCueCaptureMaxOutroSeconds = audioCue.captureMaxOutroSeconds;
+    if (audioCue.pairConfidence !== (settings.audioCuePairConfidence?.value ?? d.audioCuePairConfidence ?? 0.85)) payload.audioCuePairConfidence = audioCue.pairConfidence;
+    if (audioCue.pairMinBreakSeconds !== (settings.audioCuePairMinBreakSeconds?.value ?? d.audioCuePairMinBreakSeconds ?? 30)) payload.audioCuePairMinBreakSeconds = audioCue.pairMinBreakSeconds;
+    if (audioCue.pairMaxBreakSeconds !== (settings.audioCuePairMaxBreakSeconds?.value ?? d.audioCuePairMaxBreakSeconds ?? 480)) payload.audioCuePairMaxBreakSeconds = audioCue.pairMaxBreakSeconds;
     if (positionalPriorEnabled !== (settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled)) payload.positionalPriorEnabled = positionalPriorEnabled;
     if (selectedModel !== (settings.claudeModel?.value || '')) payload.claudeModel = selectedModel;
     if (verificationModel !== (settings.verificationModel?.value || '')) payload.verificationModel = verificationModel;
@@ -370,7 +410,12 @@ function Settings() {
     if (whisperApiConfig.model !== (settings.whisperApiModel?.value || d.whisperApiModel)) payload.whisperApiModel = whisperApiConfig.model;
     if (whisperLanguage !== (settings.whisperLanguage?.value || d.whisperLanguage)) payload.whisperLanguage = whisperLanguage;
     if (whisperComputeType !== (settings.whisperComputeType?.value || d.whisperComputeType)) payload.whisperComputeType = whisperComputeType;
+    if (transcribeMaxChunkSeconds !== (settings.transcribeMaxChunkSeconds?.value ?? 600)) payload.transcribeMaxChunkSeconds = transcribeMaxChunkSeconds;
+    if (transcribeConcurrentChunks !== (settings.transcribeConcurrentChunks?.value ?? 4)) payload.transcribeConcurrentChunks = transcribeConcurrentChunks;
+    if (transcribeChunkOverlapSeconds !== (settings.transcribeChunkOverlapSeconds?.value ?? 30)) payload.transcribeChunkOverlapSeconds = transcribeChunkOverlapSeconds;
     if (audioBitrate !== (settings.audioBitrate?.value || d.audioBitrate)) payload.audioBitrate = audioBitrate;
+    if (audioNormalizeEnabled !== (settings.audioNormalizeEnabled?.value ?? d.audioNormalizeEnabled)) payload.audioNormalizeEnabled = audioNormalizeEnabled;
+    if (audioNormalizeIntensity !== (settings.audioNormalizeIntensity?.value || d.audioNormalizeIntensity)) payload.audioNormalizeIntensity = audioNormalizeIntensity;
     if (skipFlacCompression !== (settings.skipFlacCompression?.value ?? d.skipFlacCompression)) payload.skipFlacCompression = skipFlacCompression;
 
     if (autoProcessEnabled !== (settings.autoProcessEnabled?.value ?? d.autoProcessEnabled)) payload.autoProcessEnabled = autoProcessEnabled;
@@ -397,7 +442,7 @@ function Settings() {
     if (reviewerPatternsChanged()) return true;
     return podcastIndexApiKey !== '' && podcastIndexApiSecret !== '';
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [systemPrompt, verificationPrompt, reviewer, audioCue, positionalPriorEnabled, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, skipFlacCompression, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, podcastIndexApiKey, podcastIndexApiSecret, settings, reviewerSettings]);
+  }, [systemPrompt, verificationPrompt, reviewer, audioCue, positionalPriorEnabled, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, audioNormalizeEnabled, audioNormalizeIntensity, skipFlacCompression, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, podcastIndexApiKey, podcastIndexApiSecret, settings, reviewerSettings]);
 
   // Mirror hasChanges into render-readable state so the hydration guard above
   // (which runs before hasChanges is defined) skips re-seeding while dirty.
@@ -499,17 +544,30 @@ function Settings() {
             Configure ad detection prompts and system settings
           </p>
         </div>
-        <a
-          href="/api/v1/docs"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm text-primary hover:underline flex items-center gap-1 whitespace-nowrap shrink-0"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          API Docs
-        </a>
+        <div className="flex items-center gap-4 shrink-0">
+          <a
+            href="https://github.com/ttlequals0/MinusPod/blob/main/docs/README.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-primary hover:underline flex items-center gap-1 whitespace-nowrap"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.247m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.247" />
+            </svg>
+            Docs
+          </a>
+          <a
+            href="/api/v1/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-primary hover:underline flex items-center gap-1 whitespace-nowrap"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            API Docs
+          </a>
+        </div>
       </div>
 
       <SystemStatusSection
@@ -617,6 +675,12 @@ function Settings() {
         onWhisperLanguageChange={setWhisperLanguage}
         whisperComputeType={whisperComputeType}
         onWhisperComputeTypeChange={setWhisperComputeType}
+        transcribeMaxChunkSeconds={transcribeMaxChunkSeconds}
+        onTranscribeMaxChunkSecondsChange={setTranscribeMaxChunkSeconds}
+        transcribeConcurrentChunks={transcribeConcurrentChunks}
+        onTranscribeConcurrentChunksChange={setTranscribeConcurrentChunks}
+        transcribeChunkOverlapSeconds={transcribeChunkOverlapSeconds}
+        onTranscribeChunkOverlapSecondsChange={setTranscribeChunkOverlapSeconds}
         skipFlacCompression={skipFlacCompression}
         onSkipFlacCompressionChange={setSkipFlacCompression}
         softTimeoutMinutes={softTimeoutMinutes}
@@ -672,6 +736,10 @@ function Settings() {
       <AudioSection
         audioBitrate={audioBitrate}
         onAudioBitrateChange={setAudioBitrate}
+        audioNormalizeEnabled={audioNormalizeEnabled}
+        onAudioNormalizeEnabledChange={setAudioNormalizeEnabled}
+        audioNormalizeIntensity={audioNormalizeIntensity}
+        onAudioNormalizeIntensityChange={setAudioNormalizeIntensity}
       />
 
       <Podcasting20Section

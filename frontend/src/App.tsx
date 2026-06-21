@@ -11,6 +11,7 @@ import EpisodeDetail from './pages/EpisodeDetail';
 import AddFeed from './pages/AddFeed';
 import Settings from './pages/Settings';
 import PatternsPage from './pages/PatternsPage';
+import AdInboxPage from './pages/AdInboxPage';
 import SponsorsPage from './pages/SponsorsPage';
 import HistoryPage from './pages/HistoryPage';
 import StatsPage from './pages/StatsPage';
@@ -41,6 +42,7 @@ const router = createBrowserRouter(
             { path: 'feeds/:slug/episodes/:episodeId', element: <EpisodeDetail /> },
             { path: 'add', element: <AddFeed /> },
             { path: 'search', element: <Search /> },
+            { path: 'inbox', element: <AdInboxPage /> },
             { path: 'patterns', element: <PatternsPage /> },
             { path: 'sponsors', element: <SponsorsPage /> },
             { path: 'history', element: <HistoryPage /> },

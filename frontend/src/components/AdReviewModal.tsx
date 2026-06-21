@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Play, Pause, SkipBack, SkipForward, Rewind, FastForward, Square,
   ZoomIn, ZoomOut,
+  ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
@@ -83,7 +85,45 @@ interface Props {
   // Optional: surface a "+ Add new ad" entry inside the modal so the
   // user can switch into create mode without closing the modal first.
   onAddNew?: () => void;
+  // Optional list of OTHER ads on the same episode -- regardless of
+  // status. Used to render passive overlay markers across the top of
+  // the waveform so the user can see at a glance which sections have
+  // already been triaged (confirmed/adjusted/rejected) vs. which are
+  // sibling pending detections.
+  peerAds?: PeerAdMarker[];
+  // Optional jump-to-peer callback. When provided, peer markers show
+  // a hover popover with an Edit button that swaps the active item to
+  // the peer. Omitted = passive markers (current per-episode AdEditor
+  // doesn't need this; only the Ad Inbox does).
+  onJumpToPeer?: (peerAdIndex: number) => void;
 }
+
+// Slim shape used purely for waveform overlay rendering. Keep
+// independent from AdReviewItem so the modal doesn't pull in
+// inbox-specific fields just to show markers.
+export interface PeerAdMarker {
+  adIndex: number;
+  start: number;
+  end: number;
+  sponsor: string | null;
+  status: 'pending' | 'confirmed' | 'rejected' | 'adjusted';
+}
+
+// Tailwind class palette per status. Defined as static strings so the
+// JIT actually emits the corresponding CSS (a `bg-${color}-500` template
+// literal would silently fail at build time).
+const PEER_BAR_CLASS: Record<PeerAdMarker['status'], string> = {
+  confirmed: 'bg-emerald-500/60 border-emerald-400',
+  adjusted: 'bg-sky-500/60 border-sky-400',
+  rejected: 'bg-rose-500/60 border-rose-400',
+  pending: 'bg-amber-400/50 border-amber-300',
+};
+const PEER_LABEL_CLASS: Record<PeerAdMarker['status'], string> = {
+  confirmed: 'text-emerald-50 bg-emerald-700/90',
+  adjusted: 'text-sky-50 bg-sky-700/90',
+  rejected: 'text-rose-50 bg-rose-700/90',
+  pending: 'text-amber-50 bg-amber-700/90',
+};
 
 // Cap the default visible window. Some heuristic detections (notably
 // post-roll) flag dozens of minutes as a single "ad", which would make
@@ -113,6 +153,7 @@ function AdReviewModal({
   audioMode = 'original', onAudioModeChange, hasOriginal = true,
   processedAudioUrl, episodeDuration,
   mode = 'review', onCreate, onAddNew,
+  peerAds, onJumpToPeer,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);   // waveform host
   const overlayRef = useRef<HTMLDivElement>(null);     // relative wrapper around waveform + pins
@@ -131,7 +172,21 @@ function AdReviewModal({
   // zoom; the user can still zoom out or expand by typing distant times.
   const defaults = useMemo(() => {
     const fullDuration = Math.max(0, episodeDuration ?? 0);
-    const safeEnd = fullDuration > 0 ? fullDuration : DEFAULT_MAX_WINDOW_SECONDS;
+    // When the host didn't pass episodeDuration, fall back to a value
+    // that's always >= the ad's natural window so the Math.min() below
+    // never truncates windowEnd below item.start. Using
+    // DEFAULT_MAX_WINDOW_SECONDS as an absolute time bound was a bug:
+    // for any ad starting past 360s it forced windowEnd < item.start
+    // and the peaks API rejected the request as start > end.
+    const windowStartCandidate = mode === 'create'
+      ? 0
+      : Math.max(0, item.start - CONTEXT_SECONDS);
+    const naturalEndCandidate = mode === 'create'
+      ? DEFAULT_MAX_WINDOW_SECONDS
+      : item.end + CONTEXT_SECONDS;
+    const safeEnd = fullDuration > 0
+      ? fullDuration
+      : Math.max(naturalEndCandidate, windowStartCandidate + DEFAULT_MAX_WINDOW_SECONDS);
     if (mode === 'create') {
       return {
         windowStart: 0,
@@ -140,8 +195,8 @@ function AdReviewModal({
         adEnd: Math.min(60, safeEnd),
       };
     }
-    const windowStart = Math.max(0, item.start - CONTEXT_SECONDS);
-    const naturalEnd = item.end + CONTEXT_SECONDS;
+    const windowStart = windowStartCandidate;
+    const naturalEnd = naturalEndCandidate;
     const cappedEnd = windowStart + DEFAULT_MAX_WINDOW_SECONDS;
     return {
       windowStart,
@@ -162,6 +217,24 @@ function AdReviewModal({
   const [endInput, setEndInput] = useState(() => formatTime(defaults.adEnd));
 
   const [isPlaying, setIsPlaying] = useState(false);
+  // Peer marker hover state. We render the popover via a portal to
+  // document.body to escape the modal body's overflow-y-auto and the
+  // waveform scroll container's overflow-x-auto -- both clip any inline
+  // popover. peerHover holds the active peer + the trigger's bounding
+  // rect captured on mouseenter; clears on mouseleave (with a brief
+  // grace period so the cursor can move into the popover itself).
+  const [peerHover, setPeerHover] = useState<{ peer: PeerAdMarker; rect: DOMRect } | null>(null);
+  const peerHoverLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearPeerHover = () => {
+    if (peerHoverLeaveTimer.current) clearTimeout(peerHoverLeaveTimer.current);
+    peerHoverLeaveTimer.current = setTimeout(() => setPeerHover(null), 120);
+  };
+  const cancelPeerHoverClear = () => {
+    if (peerHoverLeaveTimer.current) {
+      clearTimeout(peerHoverLeaveTimer.current);
+      peerHoverLeaveTimer.current = null;
+    }
+  };
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   // Zoom is a multiplier of "fit" -- 1 = fit-to-container, 2 = 2× zoomed in, etc.
@@ -842,6 +915,7 @@ function AdReviewModal({
   // ------------------------------------------------------------------
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm p-4"
       onMouseDown={(e) => {
@@ -1026,12 +1100,95 @@ function AdReviewModal({
             ) : !peaks ? (
               <p className="text-sm text-muted-foreground">Loading waveform…</p>
             ) : (
+              <>
+              {/* Color legend for the peer markers above the waveform.
+                  Only includes status colors actually present in
+                  peerAds so the legend collapses gracefully when the
+                  episode has e.g. only confirmed peers. */}
+              {peerAds && peerAds.length > 0 && (() => {
+                const present = new Set(peerAds.map((p) => p.status));
+                const entries = ([
+                  { status: 'confirmed' as const, label: 'Confirmed', glyph: '✓' },
+                  { status: 'adjusted' as const, label: 'Adjusted', glyph: '✎' },
+                  { status: 'rejected' as const, label: 'Rejected', glyph: '✗' },
+                  { status: 'pending' as const, label: 'Pending sibling', glyph: '·' },
+                ]).filter((e) => present.has(e.status));
+                if (entries.length === 0) return null;
+                return (
+                  <div className="mb-1 flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-muted-foreground">
+                    <span className="font-medium">Other ads on this episode:</span>
+                    {entries.map((e) => (
+                      <span key={e.status} className="inline-flex items-center gap-1.5">
+                        <span
+                          className={`inline-block w-3 h-3 border-t border-b rounded-[1px] ${PEER_BAR_CLASS[e.status]}`}
+                          aria-hidden
+                        />
+                        <span>
+                          <span className="opacity-70 mr-0.5">{e.glyph}</span>
+                          {e.label}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
               <div
                 ref={scrollContainerRef}
                 onWheel={onWheel}
                 className="overflow-x-auto"
               >
                 <div className="relative min-w-full" ref={overlayRef}>
+                  {/* Peer-ad markers: a thin colored strip per other ad
+                      on this episode. Strictly visual context -- no
+                      interaction. Helps the user spot when a current
+                      pending detection overlaps an already-confirmed
+                      ad on the same episode. Renders ONLY peers that
+                      intersect the visible window. Sits at the very
+                      top so it doesn't fight pinheads or the cursor. */}
+                  {peerAds && peerAds.length > 0 && (() => {
+                    const winDur = windowEnd - windowStart;
+                    if (winDur <= 0) return null;
+                    return (
+                      <div
+                        className="absolute top-0 inset-x-0 h-3 pointer-events-none"
+                        aria-hidden
+                      >
+                        {peerAds.map((peer) => {
+                          if (peer.end <= windowStart || peer.start >= windowEnd) return null;
+                          const clampedStart = Math.max(peer.start, windowStart);
+                          const clampedEnd = Math.min(peer.end, windowEnd);
+                          const leftPct = ((clampedStart - windowStart) / winDur) * 100;
+                          const widthPct = ((clampedEnd - clampedStart) / winDur) * 100;
+                          const label = peer.sponsor || 'unknown';
+                          const statusGlyph =
+                            peer.status === 'confirmed' ? '✓' :
+                            peer.status === 'adjusted' ? '✎' :
+                            peer.status === 'rejected' ? '✗' : '·';
+                          return (
+                            <div
+                              key={peer.adIndex}
+                              className={`absolute top-0 h-3 border-t border-b ${PEER_BAR_CLASS[peer.status]} overflow-hidden pointer-events-auto cursor-help`}
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              onMouseEnter={(e) => {
+                                cancelPeerHoverClear();
+                                setPeerHover({
+                                  peer,
+                                  rect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
+                                });
+                              }}
+                              onMouseLeave={clearPeerHover}
+                            >
+                              {widthPct > 6 && (
+                                <span className={`text-[9px] font-bold leading-3 px-1 truncate inline-block w-full ${PEER_LABEL_CLASS[peer.status]}`}>
+                                  {statusGlyph} {label}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   {/* Header strip -- gives the pinheads a place to live INSIDE
                       the overlay's box (so they aren't clipped by the
                       enclosing overflow-x-auto scroll container). */}
@@ -1121,11 +1278,24 @@ function AdReviewModal({
                   <div ref={containerRef} className="w-full" />
                 </div>
               </div>
+              </>
             )}
           </div>
 
-          {/* Zoom slider */}
+          {/* Zoom slider + window-extend buttons.
+              ←+1m / +1m→ grow the visible waveform window outward in
+              60s steps. Use this when an ad extends beyond the
+              auto-fitted view (long pre/post-rolls, monster
+              sponsorships, etc.). Mirrors the existing `,` / `.`
+              keyboard shortcuts; this just makes them discoverable. */}
           <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <button type="button" onClick={expandBack}
+              disabled={windowStart <= 0}
+              className={`px-2 py-1.5 rounded ${ghostBtn} inline-flex items-center gap-1`}
+              title="Extend window 1 minute earlier (,)">
+              <ChevronsLeft className="w-3.5 h-3.5" />
+              <span className="font-medium">+1m</span>
+            </button>
             <button type="button" onClick={zoomOut}
               disabled={zoom <= ZOOM_MIN + 0.01}
               className={`p-1.5 rounded ${ghostBtn}`}
@@ -1149,6 +1319,13 @@ function AdReviewModal({
               <ZoomIn className="w-3.5 h-3.5" />
             </button>
             <span className="tabular-nums w-10 text-right">{zoom.toFixed(1)}×</span>
+            <button type="button" onClick={expandForward}
+              disabled={!!episodeDuration && windowEnd >= episodeDuration}
+              className={`px-2 py-1.5 rounded ${ghostBtn} inline-flex items-center gap-1`}
+              title="Extend window 1 minute later (.)">
+              <span className="font-medium">+1m</span>
+              <ChevronsRight className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Full-episode scrubber: dim band = visible waveform window,
@@ -1501,6 +1678,72 @@ function AdReviewModal({
         </div>
       </div>
     </div>
+    {/* Portal-rendered peer popover. Mounted on document.body so no
+        ancestor's overflow can clip it. Positioned in viewport coords
+        from the trigger marker's bounding rect captured on hover. */}
+    {peerHover && createPortal(
+      (() => {
+        const { peer, rect } = peerHover;
+        const label = peer.sponsor || 'unknown';
+        const statusGlyph =
+          peer.status === 'confirmed' ? '✓' :
+          peer.status === 'adjusted' ? '✎' :
+          peer.status === 'rejected' ? '✗' : '·';
+        // Anchor below the marker, left-aligned with it. Clamp left so
+        // the 224px popover doesn't fall off the viewport's right edge.
+        const POPOVER_W = 224;
+        const left = Math.min(
+          rect.left,
+          (typeof window !== 'undefined' ? window.innerWidth : 1024) - POPOVER_W - 8,
+        );
+        return (
+          <div
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: `${Math.max(8, left)}px`,
+              top: `${rect.bottom + 6}px`,
+              width: `${POPOVER_W}px`,
+              zIndex: 9999,
+            }}
+            className="rounded-md border border-border bg-card shadow-2xl text-xs"
+            onMouseEnter={cancelPeerHoverClear}
+            onMouseLeave={clearPeerHover}
+          >
+            <div className="px-3 py-2 border-b border-border">
+              <div className="font-semibold text-foreground truncate">
+                {label}
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase ${PEER_LABEL_CLASS[peer.status]}`}>
+                  {statusGlyph} {peer.status}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatTime(peer.start)}–{formatTime(peer.end)}
+                </span>
+              </div>
+            </div>
+            {onJumpToPeer && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPeerHover(null);
+                  onJumpToPeer(peer.adIndex);
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between gap-2 text-primary font-medium"
+              >
+                <span>Edit this ad →</span>
+                <span className="text-[10px] text-muted-foreground font-normal">jumps to its review modal</span>
+              </button>
+            )}
+          </div>
+        );
+      })(),
+      document.body,
+    )}
+    </>
   );
 }
 

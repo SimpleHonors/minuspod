@@ -514,6 +514,18 @@ class EpisodeMixin:
         conn.commit()
         logger.debug(f"[{slug}:{episode_id}] Saved audio analysis to database")
 
+    def get_episode_audio_analysis(self, slug: str, episode_id: str):
+        """Return the raw audio_analysis_json for an episode, or None."""
+        conn = self.get_connection()
+        db_episode_id = self._get_episode_db_id(slug, episode_id)
+        if not db_episode_id:
+            return None
+        row = conn.execute(
+            "SELECT audio_analysis_json FROM episode_details WHERE episode_id = ?",
+            (db_episode_id,),
+        ).fetchone()
+        return row['audio_analysis_json'] if row else None
+
     def clear_episode_details(self, slug: str, episode_id: str):
         """Clear transcript and ad markers for an episode."""
         conn = self.get_connection()
@@ -630,6 +642,82 @@ class EpisodeMixin:
                      AND processed_file IS NOT NULL
                ORDER BY published_at DESC""",
             (podcast_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_ad_markers(self) -> List[Dict]:
+        """Return every episode's ad_markers_json plus identifying metadata.
+
+        Used by the Ad Inbox to enumerate all detected ads across the system.
+        Skips rows with no markers. Returns rows with the columns:
+        ``episode_id``, ``podcast_slug``, ``podcast_title``, ``episode_title``,
+        ``published_at``, ``ad_markers_json`` (raw JSON string),
+        ``processed_version``, ``original_duration``.
+        """
+        conn = self.get_connection()
+        cursor = conn.execute(
+            """SELECT e.episode_id,
+                      e.title              AS episode_title,
+                      e.published_at,
+                      e.processed_version,
+                      e.original_duration,
+                      ed.ad_markers_json,
+                      p.slug               AS podcast_slug,
+                      p.title              AS podcast_title
+               FROM episode_details ed
+               JOIN episodes e ON e.id = ed.episode_id
+               JOIN podcasts p ON p.id = e.podcast_id
+               WHERE ed.ad_markers_json IS NOT NULL
+                     AND ed.ad_markers_json <> '[]'
+               ORDER BY COALESCE(e.published_at, e.created_at) DESC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_corrections_for_episodes(self, episode_ids: List[str]) -> List[Dict]:
+        """Return all pattern_corrections rows for the given episode_ids.
+
+        Returns empty list when ``episode_ids`` is empty. Useful for the Ad
+        Inbox's status derivation: caller groups results by ``episode_id`` and
+        compares ``original_bounds`` against each ad marker.
+        """
+        if not episode_ids:
+            return []
+        conn = self.get_connection()
+        placeholders = ','.join('?' for _ in episode_ids)
+        cursor = conn.execute(
+            f"""SELECT id, episode_id, correction_type, pattern_id,
+                       original_bounds, corrected_bounds, created_at
+                FROM pattern_corrections
+                WHERE episode_id IN ({placeholders})""",
+            list(episode_ids)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_processed_across_all_feeds(self, limit: int) -> List[Dict]:
+        """Return the most-recent processed episodes across every podcast.
+
+        Used by the unified ``/all`` RSS feed: caller only ever exposes
+        processed episodes, sorted by ``published_at`` desc, capped at
+        ``limit``. Joins ``podcasts`` so the RSS builder has slug, title,
+        and artwork without an N+1.
+        """
+        if limit <= 0:
+            return []
+        conn = self.get_connection()
+        cursor = conn.execute(
+            """SELECT e.episode_id, e.title, e.description, e.published_at,
+                      e.new_duration, e.episode_number, e.processed_version,
+                      e.artwork_url AS episode_artwork_url,
+                      p.slug AS podcast_slug,
+                      p.title AS podcast_title,
+                      p.artwork_url AS podcast_artwork_url
+               FROM episodes e
+               JOIN podcasts p ON e.podcast_id = p.id
+               WHERE e.status = 'processed'
+                     AND e.processed_file IS NOT NULL
+               ORDER BY COALESCE(e.published_at, e.created_at) DESC
+               LIMIT ?""",
+            (limit,)
         )
         return [dict(row) for row in cursor.fetchall()]
 
