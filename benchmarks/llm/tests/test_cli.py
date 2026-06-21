@@ -12,7 +12,7 @@ from benchmark import cli
 def write_minimal_config(tmp_path: Path) -> Path:
     p = tmp_path / "benchmark.toml"
     p.write_text("""
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 

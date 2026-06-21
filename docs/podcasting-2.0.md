@@ -1,19 +1,19 @@
-# Podcasting 2.0 in MinusPod
+# Podcasting 2.0 in SparkyPod
 
-MinusPod sits between the original podcast feed and your player. It
+SparkyPod sits between the original podcast feed and your player. It
 downloads each episode, removes ad segments, re-encodes the audio, and
 serves a modified RSS feed pointing at the processed files.
 
 That position has consequences for the Podcast Namespace (the set of
-`podcast:` tags often called "Podcasting 2.0"). MinusPod is not the
+`podcast:` tags often called "Podcasting 2.0"). SparkyPod is not the
 podcast's publisher. It is a proxy that rewrites someone else's feed.
 Some namespace tags survive that rewrite unchanged. Some describe the
 original audio and become wrong the moment an ad is cut. A few would
 actively break playback if passed through. This document explains
-exactly what MinusPod emits, what it deliberately drops, and why.
+exactly what SparkyPod emits, what it deliberately drops, and why.
 
 There is nothing to configure. This behavior is automatic for every
-feed MinusPod serves.
+feed SparkyPod serves.
 
 ## The rule
 
@@ -21,25 +21,25 @@ Every Podcast Namespace tag falls into one of four buckets:
 
 1. **Pass through**: the tag is still true after ad removal, so the
    upstream value is copied into the served feed unchanged.
-2. **Regenerate**: the tag describes the audio, so MinusPod produces
+2. **Regenerate**: the tag describes the audio, so SparkyPod produces
    its own correct version for the processed file.
 3. **Strip**: the tag asserts something about the original audio that
    is false for the re-cut file, so emitting it would be a lie or
    would break players. It is removed.
-4. **Always emit**: MinusPod adds the tag regardless of the upstream
+4. **Always emit**: SparkyPod adds the tag regardless of the upstream
    feed.
 
 "Strip" is not a feature gap. Passing these tags through would make
 the feed describe audio that no longer exists.
 
-## What MinusPod supports
+## What SparkyPod supports
 
 ### Always emitted
 
 | Tag | Behavior |
 |---|---|
-| [`podcast:guid`](https://podcasting2.org/docs/podcast-namespace/tags/guid) | MinusPod mints its own feed GUID. See "Feed identity" below. |
-| [`podcast:txt`](https://podcasting2.org/docs/podcast-namespace/tags/txt) (`purpose="ai-content"`) | Always set to `true`. MinusPod algorithmically re-cuts the audio, and the served feed discloses that. Any upstream `ai-content` value is replaced, because once MinusPod has processed the file the upstream claim is no longer accurate. |
+| [`podcast:guid`](https://podcasting2.org/docs/podcast-namespace/tags/guid) | SparkyPod mints its own feed GUID. See "Feed identity" below. |
+| [`podcast:txt`](https://podcasting2.org/docs/podcast-namespace/tags/txt) (`purpose="ai-content"`) | Always set to `true`. SparkyPod algorithmically re-cuts the audio, and the served feed discloses that. Any upstream `ai-content` value is replaced, because once SparkyPod has processed the file the upstream claim is no longer accurate. |
 
 ### Passed through from the original feed
 
@@ -48,9 +48,9 @@ These remain accurate after ad removal and are copied verbatim:
 | Tag | Why it survives |
 |---|---|
 | [`podcast:funding`](https://podcasting2.org/docs/podcast-namespace/tags/funding) | The creator's donation links are unaffected by ad removal. |
-| [`podcast:locked`](https://podcasting2.org/docs/podcast-namespace/tags/locked) | Reflects the creator's intent about feed re-import. If the original feed has no `locked` tag, MinusPod emits `locked` as `yes`, because a private re-feed should not be imported into public directories. |
+| [`podcast:locked`](https://podcasting2.org/docs/podcast-namespace/tags/locked) | Reflects the creator's intent about feed re-import. If the original feed has no `locked` tag, SparkyPod emits `locked` as `yes`, because a private re-feed should not be imported into public directories. |
 | [`podcast:podroll`](https://podcasting2.org/docs/podcast-namespace/tags/podroll) | Show recommendations remain valid and useful for discovery. |
-| [`podcast:value`](https://podcasting2.org/docs/podcast-namespace/tags/value), [`podcast:valueRecipient`](https://podcasting2.org/docs/podcast-namespace/tags/value-recipient), [`podcast:valueTimeSplit`](https://podcasting2.org/docs/podcast-namespace/tags/value-time-split) | Value-for-value payment information is passed through untouched so listener support still reaches the original creator. MinusPod does not insert itself into the payment split. |
+| [`podcast:value`](https://podcasting2.org/docs/podcast-namespace/tags/value), [`podcast:valueRecipient`](https://podcasting2.org/docs/podcast-namespace/tags/value-recipient), [`podcast:valueTimeSplit`](https://podcasting2.org/docs/podcast-namespace/tags/value-time-split) | Value-for-value payment information is passed through untouched so listener support still reaches the original creator. SparkyPod does not insert itself into the payment split. |
 | [`podcast:license`](https://podcasting2.org/docs/podcast-namespace/tags/license) | Content license is metadata, not tied to the audio timeline. |
 | [`podcast:medium`](https://podcasting2.org/docs/podcast-namespace/tags/medium) | Describes the kind of content, unaffected. |
 | [`podcast:person`](https://podcasting2.org/docs/podcast-namespace/tags/person) | Host and guest credits are unaffected by cutting. |
@@ -59,27 +59,27 @@ These remain accurate after ad removal and are copied verbatim:
 | [`podcast:trailer`](https://podcasting2.org/docs/podcast-namespace/tags/trailer) | A trailer is its own separate file, not an offset into the episode. |
 | [`podcast:image`](https://podcasting2.org/docs/podcast-namespace/tags/image) | Artwork sources improve display and are unaffected. The deprecated plural `podcast:images`, if present upstream, is also passed through untouched. |
 | [`podcast:socialInteract`](https://podcasting2.org/docs/podcast-namespace/tags/social-interact) | Comment and discussion links are unaffected. |
-| [`podcast:block`](https://podcasting2.org/docs/podcast-namespace/tags/block) | The publisher's directory-block hints. Multiple instances are allowed, optionally scoped to one platform with an `id` attribute (e.g. `id="apple"`). MinusPod copies each one verbatim. Stripping these would silently expose the re-feed in directories the publisher chose to keep it out of. |
+| [`podcast:block`](https://podcasting2.org/docs/podcast-namespace/tags/block) | The publisher's directory-block hints. Multiple instances are allowed, optionally scoped to one platform with an `id` attribute (e.g. `id="apple"`). SparkyPod copies each one verbatim. Stripping these would silently expose the re-feed in directories the publisher chose to keep it out of. |
 | [`podcast:complete`](https://podcasting2.org/docs/podcast-namespace/tags/complete) | Boolean for "no more episodes are coming". Applies to the show, not the audio timeline; ad removal does not change whether the run is over. |
 | [`podcast:txt`](https://podcasting2.org/docs/podcast-namespace/tags/txt) (general, no `verify` purpose) | Free-form metadata, harmless to carry. |
 
 ### Regenerated for the processed audio
 
-MinusPod already produces these for the cut file. The upstream
+SparkyPod already produces these for the cut file. The upstream
 versions are discarded because their timestamps point into the
-original, uncut audio, and because subscribers to a MinusPod feed
+original, uncut audio, and because subscribers to a SparkyPod feed
 must never be sent to a publisher URL: the proxy serves everything
-or nothing. Until MinusPod finishes processing an episode, the served
+or nothing. Until SparkyPod finishes processing an episode, the served
 feed carries no transcript or chapter URL for it; the audio enclosure
 returns 503 with a JIT-triggered processing job behind it.
 
 | Tag | Why it is regenerated |
 |---|---|
-| [`podcast:transcript`](https://podcasting2.org/docs/podcast-namespace/tags/transcript) | MinusPod generates a transcript aligned to the processed audio. An upstream transcript would be offset by the length of every removed ad, and would also point subscribers at the publisher's CDN. |
+| [`podcast:transcript`](https://podcasting2.org/docs/podcast-namespace/tags/transcript) | SparkyPod generates a transcript aligned to the processed audio. An upstream transcript would be offset by the length of every removed ad, and would also point subscribers at the publisher's CDN. |
 | [`podcast:chapters`](https://podcasting2.org/docs/podcast-namespace/tags/chapters) | Same reasons. Chapter markers from the original feed land in the wrong place after cutting. |
 | `itunes:duration` | Recomputed from the processed file's actual length. |
 
-## What MinusPod does not support, and why
+## What SparkyPod does not support, and why
 
 ### Deliberately stripped
 
@@ -92,33 +92,33 @@ refuse to play the episode.
 | [`podcast:soundbite`](https://podcasting2.org/docs/podcast-namespace/tags/soundbite) | `startTime` and `duration` point into the original timeline. After cutting, that offset is wrong, so a "highlight" would play the wrong audio, possibly mid-sentence or inside a removed ad. |
 | [`podcast:integrity`](https://podcasting2.org/docs/podcast-namespace/tags/integrity) | A cryptographic hash of the original audio bytes. The processed file will never match it. A player that verifies integrity will reject the episode outright. |
 | [`podcast:alternateEnclosure`](https://podcasting2.org/docs/podcast-namespace/tags/alternate-enclosure) | Points at other copies of the original, un-stripped audio. Following it bypasses ad removal entirely. |
-| [`podcast:source`](https://podcasting2.org/docs/podcast-namespace/tags/source) | Describes sources of the original audio, not the processed file MinusPod serves. |
-| [`podcast:liveItem`](https://podcasting2.org/docs/podcast-namespace/tags/live-item) | A live stream. By the time MinusPod has downloaded and processed recorded audio, the live event is over. It has no meaning in a re-cut feed. |
-| [`podcast:txt`](https://podcasting2.org/docs/podcast-namespace/tags/txt) (`purpose="verify"` or `purpose="applepodcastsverify"`) | An ownership-verification token a hosting platform issued to the original publisher. It proves nothing about a MinusPod re-feed, and carrying it forward leaks the original owner's token into a feed they don't control. |
+| [`podcast:source`](https://podcasting2.org/docs/podcast-namespace/tags/source) | Describes sources of the original audio, not the processed file SparkyPod serves. |
+| [`podcast:liveItem`](https://podcasting2.org/docs/podcast-namespace/tags/live-item) | A live stream. By the time SparkyPod has downloaded and processed recorded audio, the live event is over. It has no meaning in a re-cut feed. |
+| [`podcast:txt`](https://podcasting2.org/docs/podcast-namespace/tags/txt) (`purpose="verify"` or `purpose="applepodcastsverify"`) | An ownership-verification token a hosting platform issued to the original publisher. It proves nothing about a SparkyPod re-feed, and carrying it forward leaks the original owner's token into a feed they don't control. |
 
 ### Not supported: Podping
 
 `podcast:podping` signals that a feed sends Podping notifications when
-it updates. MinusPod does not implement Podping and does not emit this
+it updates. SparkyPod does not implement Podping and does not emit this
 tag.
 
 This is a deliberate decision, not a missing feature. Podping works by
 writing the feed URL to the Hive blockchain, a public, permanent,
 append-only ledger that anyone can watch. The entire purpose of
 Podping is to broadcast feed updates to every aggregator and directory.
-MinusPod serves private, ad-stripped re-feeds of podcasts you do not
+SparkyPod serves private, ad-stripped re-feeds of podcasts you do not
 own. Publishing those URLs to a permanent public record, and inviting
 the whole podcast ecosystem to crawl them, is the opposite of what a
-private re-feed is for. There is no private mode for Podping. MinusPod
+private re-feed is for. There is no private mode for Podping. SparkyPod
 will not add it.
 
 ## Feed identity
 
-MinusPod mints its own `podcast:guid` rather than reusing the original
+SparkyPod mints its own `podcast:guid` rather than reusing the original
 feed's GUID.
 
 The GUID is the stable identifier other tools use to recognize a feed.
-A MinusPod feed is a modified derivative served at a different URL. If
+A SparkyPod feed is a modified derivative served at a different URL. If
 it claimed the original's GUID, aggregators could treat the two feeds
 as the same feed, which they are not.
 
@@ -127,7 +127,7 @@ The GUID is computed the way the
 specifies: a deterministic UUIDv5 over the served feed URL, using the
 namespace's fixed constant. The same feed URL always produces the same
 GUID, so the identity is stable for as long as the feed is served at
-the same address. If you move MinusPod to a different domain, the
+the same address. If you move SparkyPod to a different domain, the
 served URL changes and so does the GUID, which is correct, because at
 that point it is genuinely a feed at a new address.
 
@@ -136,7 +136,7 @@ that point it is genuinely a feed at a new address.
 The Podcast Namespace spec treats several xmlns URIs as equivalent, and
 real-world feeds use them interchangeably. The reference `pc20.xml` feed,
 for example, declares the GitHub-blob form rather than the
-`podcastindex.org` form. MinusPod accepts all of these on parse:
+`podcastindex.org` form. SparkyPod accepts all of these on parse:
 
 - `https://podcastindex.org/namespace/1.0`
 - `https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md`
@@ -149,7 +149,7 @@ Passthrough tags are re-emitted under the canonical `podcast:` prefix.
 
 ## Compatibility with older players
 
-Every tag MinusPod adds is in the `podcast:` namespace. A player that
+Every tag SparkyPod adds is in the `podcast:` namespace. A player that
 does not understand a tag ignores it; the standard RSS and `itunes:`
 elements it relies on are untouched. A basic podcast app sees a normal
 feed and plays the audio. Podcasting 2.0 apps see the additional tags.
@@ -157,7 +157,7 @@ Nothing about this support breaks older clients.
 
 ## Summary
 
-MinusPod aims to be as Podcasting 2.0 compliant as a re-cutting proxy
+SparkyPod aims to be as Podcasting 2.0 compliant as a re-cutting proxy
 honestly can be: it carries forward everything that stays true, it
 regenerates what it can produce correctly for the processed audio, it
 discloses that the audio was modified, and it refuses to emit tags

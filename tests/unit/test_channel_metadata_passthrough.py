@@ -94,7 +94,7 @@ class TestItunesPassthrough:
 class TestItunesNewFeedUrlStripped:
     def test_itunes_new_feed_url_must_not_leak(self):
         # CRITICAL: if this passes through, podcast apps interpret it as a
-        # migration signal and move every MinusPod subscriber to the
+        # migration signal and move every SparkyPod subscriber to the
         # upstream feed URL. Never carry through.
         out = _served(
             '<itunes:new-feed-url>https://upstream.example.com/migrate.xml</itunes:new-feed-url>'
@@ -123,9 +123,9 @@ class TestStandardRssPassthrough:
 
 
 class TestAlwaysEmitted:
-    def test_generator_is_minuspod(self):
+    def test_generator_is_sparkypod(self):
         out = _served("")
-        assert "<generator>MinusPod</generator>" in out
+        assert "<generator>SparkyPod</generator>" in out
 
     def test_lastbuilddate_is_fresh_and_rfc2822(self):
         out = _served("")

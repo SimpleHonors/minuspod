@@ -2,7 +2,7 @@
 
 Given a local pattern's id, runs quality gates, PII stripping, metadata
 stripping, sponsor classification, and produces a JSON document suitable
-for submission to the MinusPod patterns/community/ directory in the
+for submission to the SparkyPod patterns/community/ directory in the
 upstream GitHub repository.
 
 Returns a structured dict the API layer can hand to the frontend.

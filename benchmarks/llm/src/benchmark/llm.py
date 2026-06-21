@@ -165,8 +165,8 @@ async def _call_openai_compatible(
     default_headers: dict[str, str] | None = None
     if provider.base_url and "openrouter.ai" in provider.base_url:
         default_headers = {
-            "HTTP-Referer": "https://github.com/ttlequals0/MinusPod",
-            "X-Title": "MinusPod LLM Benchmark",
+            "HTTP-Referer": "https://github.com/SimpleHonors/sparkypod",
+            "X-Title": "SparkyPod LLM Benchmark",
         }
 
     client = AsyncOpenAI(

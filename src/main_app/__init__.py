@@ -537,7 +537,7 @@ app.config['COMPRESS_LEVEL'] = 6  # Balance between speed and compression
 app.config['COMPRESS_MIN_SIZE'] = 500  # Only compress responses > 500 bytes
 compress.init_app(app)
 
-# CORS is intentionally NOT enabled. MinusPod is single-origin (browser
+# CORS is intentionally NOT enabled. SparkyPod is single-origin (browser
 # talks to the same host that serves the API); the Vite dev server at
 # :5173 proxies /api/* to :8000, so cross-origin requests never reach
 # the Python process in practice. Removing flask-cors closes an
@@ -662,7 +662,7 @@ def _startup():
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
             from version import __version__
-            logger.info(f"MinusPod v{__version__} starting...")
+            logger.info(f"SparkyPod v{__version__} starting...")
         except ImportError:
             logger.warning("Could not import version")
 

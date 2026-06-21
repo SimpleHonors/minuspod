@@ -1,6 +1,6 @@
-# MinusPod community patterns
+# SparkyPod community patterns
 
-This directory holds the crowdsourced ad pattern set. Each file is one pattern. Other MinusPod instances pull the manifest from this directory on a schedule (opt-in) and import patterns so a fresh install benefits from coverage built up elsewhere.
+This directory holds the crowdsourced ad pattern set. Each file is one pattern. Other SparkyPod instances pull the manifest from this directory on a schedule (opt-in) and import patterns so a fresh install benefits from coverage built up elsewhere.
 
 -----
 
@@ -21,10 +21,10 @@ patterns/
 
 ## How sync works
 
-Opted-in MinusPod instances fetch:
+Opted-in SparkyPod instances fetch:
 
 ```
-https://raw.githubusercontent.com/ttlequals0/MinusPod/main/patterns/community/index.json
+https://raw.githubusercontent.com/SimpleHonors/sparkypod/main/patterns/community/index.json
 ```
 
 on a configurable cron schedule (default weekly). The manifest lists every published pattern with its `community_id` and `version`. The client:
@@ -92,7 +92,7 @@ Fields:
 - `community_id` - stable identifier across all instances
 - `version` - increments when the pattern is updated upstream
 - `submitted_at` - ISO 8601 timestamp of the original submission
-- `submitted_app_version` - version of the submitting MinusPod app, used for triage
+- `submitted_app_version` - version of the submitting SparkyPod app, used for triage
 - `sponsor.name` / `sponsor.aliases` - sponsor identity, looked up against the seed list on import
 - `sponsor.tags` - multi-tag classification, all values must exist in the vocabulary
 - `sponsor_match` - set by the app on submission: `exact`, `alias`, `fuzzy`, or `unknown`
@@ -104,7 +104,7 @@ Fields:
 
 ## Tag vocabulary
 
-49 tags in a flat namespace. The canonical source is `src/seed_data/tag_vocabulary.csv` in the MinusPod app code (read by `src/utils/community_tags.py`). A reference copy lives in `vocabulary.json` alongside the patterns for human readability.
+49 tags in a flat namespace. The canonical source is `src/seed_data/tag_vocabulary.csv` in the SparkyPod app code (read by `src/utils/community_tags.py`). A reference copy lives in `vocabulary.json` alongside the patterns for human readability.
 
 Tag categories (informal grouping for documentation only; they are all in one namespace):
 
@@ -158,11 +158,11 @@ schema. Fill in `intro_variants` / `outro_variants` afterward as needed, then:
 1. Open a PR adding the file.
 1. The GitHub Action validates; expect the same checks as automatic submission.
 
-Maintainers who receive a bundle (`minuspod-submission-<id>.json`) and want to
+Maintainers who receive a bundle (`sparkypod-submission-<id>.json`) and want to
 land it as per-pattern files instead can run:
 
 ```
-python -m src.tools.split_bundle patterns/community/minuspod-submission-<id>.json
+python -m src.tools.split_bundle patterns/community/sparkypod-submission-<id>.json
 ```
 
 The bundle is replaced in place by one `<slug>-<short_uuid>.json` file per
@@ -230,10 +230,10 @@ Open a PR removing the JSON file from `patterns/community/`. On merge, the regen
 
 No personal information is captured in any pattern file. See `CONTRIBUTING.md` for the full list of what gets stripped before submission.
 
-The GitHub PR author identity is visible because PRs are public. This is a property of GitHub, not MinusPod. Submitters who want anonymity at that level should use a separate GitHub account.
+The GitHub PR author identity is visible because PRs are public. This is a property of GitHub, not SparkyPod. Submitters who want anonymity at that level should use a separate GitHub account.
 
 -----
 
 ## Questions
 
-Open an issue on the main MinusPod repo for anything not covered here.
+Open an issue on the main SparkyPod repo for anything not covered here.

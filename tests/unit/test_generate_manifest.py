@@ -29,7 +29,7 @@ def test_bundle_file_flattens_into_manifest(tmp_path):
         'text_template': 'flat one',
     })
     _write(community / 'bundle.json', {
-        'format': 'minuspod-community-submission',
+        'format': 'sparkypod-community-submission',
         'bundle_version': 1,
         'submitted_at': '2026-02-01T00:00:00Z',
         'submitted_app_version': '2.4.5',
@@ -115,7 +115,7 @@ def test_bundle_with_missing_community_id_is_skipped(tmp_path, capsys):
     community = tmp_path / 'community'
     community.mkdir()
     _write(community / 'bundle.json', {
-        'format': 'minuspod-community-submission',
+        'format': 'sparkypod-community-submission',
         'patterns': [
             {'community_id': 'ok-1', 'sponsor': 'A', 'text_template': 't',
              'version': 1, 'submitted_at': '2026-01-01T00:00:00Z'},

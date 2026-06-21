@@ -232,7 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Editable feed title (#375). Each feed's detail page now has an inline title editor: rename a show and the new title is what subscribers see in their podcast app, so a MinusPod-processed feed is easy to tell apart from the source. The override survives RSS refreshes (the source title used to overwrite any manual edit), and clearing it falls back to the source title. Exposed as titleOverride on the feeds API.
+- Editable feed title (#375). Each feed's detail page now has an inline title editor: rename a show and the new title is what subscribers see in their podcast app, so a SparkyPod-processed feed is easy to tell apart from the source. The override survives RSS refreshes (the source title used to overwrite any manual edit), and clearing it falls back to the source title. Exposed as titleOverride on the feeds API.
 
 ### Security
 
@@ -376,13 +376,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- Documented `OMP_NUM_THREADS` for local CPU transcription on hybrid Intel CPUs (issue #333). On 12th gen and newer Intel chips the default OpenMP thread pool spreads `faster-whisper` work across the slow E-cores and thrashes the cache; capping `OMP_NUM_THREADS` to the performance-core count, and optionally pinning the container to P-cores with `--cpuset-cpus` (Docker) or `CPUSetCPUs=` (Podman), removes the bottleneck. Added an `OMP_NUM_THREADS` row to `docs/environment-variables.md`, a commented example in `.env.example`, and an "Intel hybrid CPU tuning" section to `docs/installation.md`. No code change; the value is read by CTranslate2 because MinusPod leaves `cpu_threads` at its default.
+- Documented `OMP_NUM_THREADS` for local CPU transcription on hybrid Intel CPUs (issue #333). On 12th gen and newer Intel chips the default OpenMP thread pool spreads `faster-whisper` work across the slow E-cores and thrashes the cache; capping `OMP_NUM_THREADS` to the performance-core count, and optionally pinning the container to P-cores with `--cpuset-cpus` (Docker) or `CPUSetCPUs=` (Podman), removes the bottleneck. Added an `OMP_NUM_THREADS` row to `docs/environment-variables.md`, a commented example in `.env.example`, and an "Intel hybrid CPU tuning" section to `docs/installation.md`. No code change; the value is read by CTranslate2 because SparkyPod leaves `cpu_threads` at its default.
 
 ## [2.7.5] - 2026-06-05
 
 ### Added
 
-- The OpenRouter model dropdown now lists the `openrouter/free` and `openrouter/auto` router aliases (issue #331). Both are valid OpenRouter model IDs -- `openrouter/free` routes each request to one of OpenRouter's free models, `openrouter/auto` picks a model for the prompt -- but neither appears in OpenRouter's `/api/v1/models` response, so they never showed up in the dropdown and could not be selected. MinusPod now injects them when the provider is OpenRouter.
+- The OpenRouter model dropdown now lists the `openrouter/free` and `openrouter/auto` router aliases (issue #331). Both are valid OpenRouter model IDs -- `openrouter/free` routes each request to one of OpenRouter's free models, `openrouter/auto` picks a model for the prompt -- but neither appears in OpenRouter's `/api/v1/models` response, so they never showed up in the dropdown and could not be selected. SparkyPod now injects them when the provider is OpenRouter.
 
 ### Fixed
 
@@ -457,7 +457,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- LLM benchmark report: the TL;DR rankings (Best Accuracy, Best Value, Best Free-Tier) now lead with F0.5 instead of F1. MinusPod cuts the segments it flags, so a false positive (cutting real content) is worse than a false negative (leaving an ad in); F0.5 weights precision 2x recall to match. Best Accuracy and Best Free-Tier add a 95% confidence interval per model and group models into tiers by a paired one-sided t-test against the tier leader, so the top cluster that trades wins across the 12-episode corpus reads as one tier rather than a false strict order. Raw F1, precision, and recall stay as columns. Models are flagged (not reordered) for low JSON compliance (`brittle JSON`, < 0.90) or a failed no-ad negative control.
+- LLM benchmark report: the TL;DR rankings (Best Accuracy, Best Value, Best Free-Tier) now lead with F0.5 instead of F1. SparkyPod cuts the segments it flags, so a false positive (cutting real content) is worse than a false negative (leaving an ad in); F0.5 weights precision 2x recall to match. Best Accuracy and Best Free-Tier add a 95% confidence interval per model and group models into tiers by a paired one-sided t-test against the tier leader, so the top cluster that trades wins across the 12-episode corpus reads as one tier rather than a false strict order. Raw F1, precision, and recall stay as columns. Models are flagged (not reordered) for low JSON compliance (`brittle JSON`, < 0.90) or a failed no-ad negative control.
 
 ### Security
 
@@ -485,7 +485,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - No-password installs: without `APP_PASSWORD`, sensitive routes (backup, cleanup, provider rotate/test, feed delete/update) now return 403 until a password is set.
 - Private/LAN feed hosts: set `MINUSPOD_ALLOW_PRIVATE_FEED_HOSTS=true` if any feed source is on a private/LAN address, otherwise those feeds are rejected at fetch time.
-- Reverse proxy: set `MINUSPOD_TRUSTED_PROXY_COUNT` to the number of proxies in front of MinusPod so login lockout and rate limiting see the real client IP (defaults to 0).
+- Reverse proxy: set `MINUSPOD_TRUSTED_PROXY_COUNT` to the number of proxies in front of SparkyPod so login lockout and rate limiting see the real client IP (defaults to 0).
 
 ### Dependencies
 
@@ -511,7 +511,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Benchmark tool gains 10 new cloud models** in `benchmarks/llm/benchmark.toml.example` (also added to the gitignored live `benchmark.toml`): `qwen/qwen3-235b-a22b-2507`, `qwen/qwen3.6-plus`, `qwen/qwen3.6-flash`, `qwen/qwen3-8b`, `qwen/qwen3-14b`, `qwen/qwen3.5-27b`, `openai/gpt-5.4-mini`, `openai/gpt-oss-120b`, `deepseek/deepseek-v4-pro`, `google/gemini-2.5-flash-lite`. These are the cloud counterparts of the local recommendations in `docs/llm-providers.md`; they will populate the leaderboard after the next `benchmark run`.
 - **Benchmark report TL;DR tables now expose F1 stdev and JSON mode columns.** The F1 stdev column reads from the existing `ModelStats.mean_f1_stdev` (the mean across episodes of within-episode trial stdev) so rank gaps inside the noise floor are no longer easy to over-read. The JSON mode column classifies each model as `native`, `prompt-inject`, or `mixed` based on the `json_format_used` field that the runner has been writing to `calls.jsonl` for some time; a model is `native` or `prompt-inject` only when >=95% of calls used that mode, otherwise `mixed`. The per-model detail block also shows the JSON-mode primary, the native percent, and the call count.
 - **`src/tools/scaffold_community_pattern.py`** -- CLI helper for hand-crafting community pattern JSON. Writes a schema-correct file to `patterns/community/<slug>-<short_uuid>.json` so the filename matches the sponsor by construction. Closes the manual-contributor footgun behind PR #292.
-- **`src/tools/split_bundle.py`** -- maintainer helper that explodes a `minuspod-submission-*.json` bundle into per-pattern `<slug>-<short>.json` files in the same directory using the shared `slugify` helper. Refuses to overwrite existing files; removes the bundle on success unless `--keep-original` is passed.
+- **`src/tools/split_bundle.py`** -- maintainer helper that explodes a `sparkypod-submission-*.json` bundle into per-pattern `<slug>-<short>.json` files in the same directory using the shared `slugify` helper. Refuses to overwrite existing files; removes the bundle on success unless `--keep-original` is passed.
 - **Pattern Export dialog lets the contributor refine sponsor, aliases, and tags per pattern before download.** Each row in the Export dialog grows an `Edit` toggle when the destination is `community`; the inline panel shows the sponsor / aliases / tags fields plus a live filename preview that matches what the PR validator's filename check will expect. Overrides are per-export only; the local pattern row is not modified. Backend routes (`/patterns/preview-export`, `/patterns/submit-bundle`) gained an additive optional `overrides` body field shaped `{ <pattern_id>: { sponsor?, sponsor_aliases?, sponsor_tags? } }`; existing callers that send no overrides keep the prior behaviour. Closes the upstream cause of the filename mismatches #294 catches at PR time.
 
 ### Changed
@@ -535,7 +535,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Re-publish under a new tag so Portainer's webhook pulls a fresh image.** No code changes vs `2.5.32` -- the `ttlequals0/minuspod:2.5.32` push contained the `bulk_upsert` discovery-count fix, but the running stack restarted from its local image cache (the tag string was unchanged) and never picked up the new layers. Bumping the tag forces a registry pull on the next webhook fire. Future deploys against a same-tag rebuild should either set the stack's pull policy to always or follow this same pattern.
+- **Re-publish under a new tag so Portainer's webhook pulls a fresh image.** No code changes vs `2.5.32` -- the `SimpleHonors/sparkypod:2.5.32` push contained the `bulk_upsert` discovery-count fix, but the running stack restarted from its local image cache (the tag string was unchanged) and never picked up the new layers. Bumping the tag forces a registry pull on the next webhook fire. Future deploys against a same-tag rebuild should either set the stack's pull policy to always or follow this same pattern.
 
 ## [2.5.32] - 2026-05-27
 
@@ -735,7 +735,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Boot banners now fire once per restart, not once per worker.** Gunicorn runs 2 workers; on the previous code every banner (`MinusPod v... starting`, `BASE_URL`, `LLM endpoint verified`, `LLM provider verified`, `OpenAI-compatible client initialized`, `Verifying LLM endpoint`, `Registered signal handlers`, `Web UI available`, `Pattern catalog`, `Rate limiter initialized`, `ProxyFix enabled`, `Existing database found ... running migrations`, `Created new tables for cross-episode training and processing history`) printed in both worker processes. The leader/follower gate already used for background-thread ownership now also gates the operator-facing banners. The follower emits one DEBUG line. Per-config banners that aren't operator-actionable (`Pattern catalog`, `Rate limiter initialized`, `ProxyFix enabled`, `Registered signal handlers`) drop to DEBUG entirely.
+- **Boot banners now fire once per restart, not once per worker.** Gunicorn runs 2 workers; on the previous code every banner (`SparkyPod v... starting`, `BASE_URL`, `LLM endpoint verified`, `LLM provider verified`, `OpenAI-compatible client initialized`, `Verifying LLM endpoint`, `Registered signal handlers`, `Web UI available`, `Pattern catalog`, `Rate limiter initialized`, `ProxyFix enabled`, `Existing database found ... running migrations`, `Created new tables for cross-episode training and processing history`) printed in both worker processes. The leader/follower gate already used for background-thread ownership now also gates the operator-facing banners. The follower emits one DEBUG line. Per-config banners that aren't operator-actionable (`Pattern catalog`, `Rate limiter initialized`, `ProxyFix enabled`, `Registered signal handlers`) drop to DEBUG entirely.
 - **`Created new tables for cross-episode training and processing history`** is now gated on a sentinel check: the line only logs when `ad_reviewer_log` did not exist on this boot. Most boots it already does, so the line stays silent.
 - **`Existing database found at ..., running migrations`** demoted to DEBUG. It fires every boot regardless of whether any migration produced a change.
 - **`verify_llm_connection()` runs on the leader only.** All workers share the same host and network reachability, so the second verification request and the four duplicate INFO lines it produced were waste.
@@ -798,21 +798,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Reverted the 2.5.4 upstream-transcript/upstream-chapters passthrough.** 2.5.4 emitted per-episode `<podcast:transcript>` and `<podcast:chapters>` tags pointing at the publisher's CDN (e.g. `mp3s.nashownotes.com`, `reflex.livewire.io`) whenever MinusPod had not yet processed the episode. This violated the core MinusPod contract: subscribers to a proxied feed must reach MinusPod for all content, never the publisher. The served feed now emits these tags ONLY when MinusPod has its own regenerated VTT / JSON cached; unprocessed episodes carry no transcript or chapters URL. The audio enclosure path is unchanged (returns 503 + JIT-triggered processing, same as it always has). `_extract_per_episode_pc2_tags` and its tests are removed. New regression test `tests/unit/test_no_upstream_url_leak.py` asserts that the modified feed contains zero upstream URLs in either tag. Rollback: redeploy the prior image; no schema or cache changes.
+- **Reverted the 2.5.4 upstream-transcript/upstream-chapters passthrough.** 2.5.4 emitted per-episode `<podcast:transcript>` and `<podcast:chapters>` tags pointing at the publisher's CDN (e.g. `mp3s.nashownotes.com`, `reflex.livewire.io`) whenever SparkyPod had not yet processed the episode. This violated the core SparkyPod contract: subscribers to a proxied feed must reach SparkyPod for all content, never the publisher. The served feed now emits these tags ONLY when SparkyPod has its own regenerated VTT / JSON cached; unprocessed episodes carry no transcript or chapters URL. The audio enclosure path is unchanged (returns 503 + JIT-triggered processing, same as it always has). `_extract_per_episode_pc2_tags` and its tests are removed. New regression test `tests/unit/test_no_upstream_url_leak.py` asserts that the modified feed contains zero upstream URLs in either tag. Rollback: redeploy the prior image; no schema or cache changes.
 
 ## [2.5.4] - 2026-05-19
 
 ### Fixed
 
-- **Per-episode `<podcast:transcript>` and `<podcast:chapters>` are no longer dropped on unprocessed episodes.** Before this release, the served feed only emitted these tags when MinusPod had cached its own regenerated VTT/JSON for the episode. For feeds where many episodes are still in `discovered`/`processing` state (typical immediately after adding a podcast), MinusPod serves the original upstream audio through its enclosure URL, but stripped the upstream publisher's transcript and chapter references. Subscribers lost access to the publisher's transcripts and chapter markers entirely until each episode finished cut-processing. New behavior: when MinusPod has its own regenerated file the served URL points at it (cut-aligned timestamps); otherwise every per-item `<podcast:transcript>` and `<podcast:chapters>` from upstream is re-emitted verbatim with all attributes preserved (`url`, `type`, `language`, `rel`). pc20 served feed went from 0 to 193 per-episode transcript and chapter tags as a result. See `docs/podcasting-2.0.md` for the updated semantics.
+- **Per-episode `<podcast:transcript>` and `<podcast:chapters>` are no longer dropped on unprocessed episodes.** Before this release, the served feed only emitted these tags when SparkyPod had cached its own regenerated VTT/JSON for the episode. For feeds where many episodes are still in `discovered`/`processing` state (typical immediately after adding a podcast), SparkyPod serves the original upstream audio through its enclosure URL, but stripped the upstream publisher's transcript and chapter references. Subscribers lost access to the publisher's transcripts and chapter markers entirely until each episode finished cut-processing. New behavior: when SparkyPod has its own regenerated file the served URL points at it (cut-aligned timestamps); otherwise every per-item `<podcast:transcript>` and `<podcast:chapters>` from upstream is re-emitted verbatim with all attributes preserved (`url`, `type`, `language`, `rel`). pc20 served feed went from 0 to 193 per-episode transcript and chapter tags as a result. See `docs/podcasting-2.0.md` for the updated semantics.
 
 ## [2.5.3] - 2026-05-19
 
 ### Fixed
 
 - **Modified RSS now passes through standard RSS + iTunes channel metadata.** `modify_feed` only emitted `<title>`, `<link>`, `<description>`, `<language>`, and `<image>` at channel scope; every iTunes channel tag (`itunes:author`, `itunes:summary`, `itunes:owner`, `itunes:category`, `itunes:explicit`, `itunes:keywords`, `itunes:type`, `itunes:block`, `itunes:complete`, `itunes:subtitle`) plus standard RSS metadata (`managingEditor`, `webMaster`, `copyright`, `category`, `pubDate`, `ttl`, `docs`) was silently dropped. Apple Podcasts and most podcast apps require several of these to ingest the feed at all, so artwork would not render in apps even when the URL was reachable. A new `_emit_channel_metadata_passthrough` method walks channel-level direct children of the upstream XML and re-serializes the allowlisted tags under their canonical prefix, with strict same-namespace recursion (so nested `itunes:owner > itunes:name + itunes:email` survives intact).
-- **`itunes:new-feed-url` is now explicitly stripped.** Apps interpret this tag as a "feed has moved" signal and migrate every subscriber to the URL it points at. Passing it through would silently redirect MinusPod subscribers back to the upstream feed.
-- **Fresh `<lastBuildDate>` and `<generator>` emitted on every served feed.** Apps that use `lastBuildDate` to decide whether to re-fetch were seeing the upstream's stale timestamp and skipping refreshes. `<generator>` now reads `MinusPod` for attribution.
+- **`itunes:new-feed-url` is now explicitly stripped.** Apps interpret this tag as a "feed has moved" signal and migrate every subscriber to the URL it points at. Passing it through would silently redirect SparkyPod subscribers back to the upstream feed.
+- **Fresh `<lastBuildDate>` and `<generator>` emitted on every served feed.** Apps that use `lastBuildDate` to decide whether to re-fetch were seeing the upstream's stale timestamp and skipping refreshes. `<generator>` now reads `SparkyPod` for attribution.
 - **Episode list rows wrapped chip text mid-string at narrow widths.** Adding the show-artwork thumbnail to `EpisodeRow` in 2.5.2 reduced the meta-row's horizontal space; spans without `whitespace-nowrap` started wrapping inside (`2h\n39m`, `4 ads\ndetected`). The meta-row container now uses `flex-wrap` with column/row gaps, and each chip span has `whitespace-nowrap`, so chips wrap as whole units when needed.
 - **"+ Add new ad" button on the no-ads-detected panel collapsed to a wrapped label on narrow viewports.** Mirrored the existing `AdReviewModal` pattern: plus-icon only on mobile, full label on `sm:+`. The button row has `gap-3` and the column has `shrink-0`/`min-w-0` so the description text doesn't squeeze the button.
 
@@ -820,7 +820,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Channel artwork URL was being overridden by per-episode `itunes:image` tags.** feedparser flattens every `<itunes:image>` across the document into a single `feed.image.href`, so a feed that declares a proper 144x144 PNG at channel scope and a different image per episode (e.g. the Podcasting 2.0 reference feed pc20.xml, whose first episode references a 40 MB animated GIF) ended up with MinusPod storing the per-episode override as the show's "official" artwork. The retry-on-every-request artwork cache then burned ~200 ms per page load failing to cache the GIF against the size cap. `RSSParser.extract_podcast_artwork_url` now parses raw channel-level XML via defusedxml: it prefers `<itunes:image href="...">` as a direct child of `<channel>`, falls back to `<image><url>`, and never considers per-episode tags. Both callers (`refresh_rss_feed` and `_extract_artwork_url_from_feed`) now pass raw bytes.
+- **Channel artwork URL was being overridden by per-episode `itunes:image` tags.** feedparser flattens every `<itunes:image>` across the document into a single `feed.image.href`, so a feed that declares a proper 144x144 PNG at channel scope and a different image per episode (e.g. the Podcasting 2.0 reference feed pc20.xml, whose first episode references a 40 MB animated GIF) ended up with SparkyPod storing the per-episode override as the show's "official" artwork. The retry-on-every-request artwork cache then burned ~200 ms per page load failing to cache the GIF against the size cap. `RSSParser.extract_podcast_artwork_url` now parses raw channel-level XML via defusedxml: it prefers `<itunes:image href="...">` as a direct child of `<channel>`, falls back to `<image><url>`, and never considers per-episode tags. Both callers (`refresh_rss_feed` and `_extract_artwork_url_from_feed`) now pass raw bytes.
 - **Modified RSS had no channel-level `<itunes:image>` tag.** Apple Podcasts and most podcast players prefer this over the standard `<image>` block, so feeds whose web-UI artwork looked fine still showed no cover in subscribers' apps. `modify_feed` now emits both `<image>` AND `<itunes:image>` at channel scope using the URL returned by the new raw-XML extractor.
 - **Artwork endpoint hammered upstream hosts on every request.** `GET /api/v1/feeds/<slug>/artwork` attempted a full re-download whenever the cached file was missing, even when the prior download had failed cleanly (size cap, content-type rejection, fetch error). Now only retries when `artwork_cached=1` (the "file went missing out from under us" case); when `cached=0`, returns 404 immediately and lets the 15-minute refresh cycle handle the retry.
 
@@ -833,7 +833,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 ### Fixed
 
 - **Feed-detail and episode-detail pages now render the channel description as plaintext.** `FeedDetail.tsx` rendered `{feed.description}` directly, while the existing `EpisodeList`/`EpisodeDetail` paths already pipe descriptions through `stripHtml()`. Feeds whose channel description contains HTML (typical: Wordpress-generated `<p>` blocks) were rendering literal `<p>` and `<strong>` tags as visible text. Same `stripHtml` helper now used at the feed-detail callsite.
-- **Feed-detail and episode-detail pages now fall back to the upstream artwork URL when MinusPod's cache is empty.** Both pages hard-coded `src={`/api/v1/feeds/${slug}/artwork`}`, which serves a 404 (and the fallback grey-checkmark SVG) when the cached file is missing. `FeedCard` already preferred the API-supplied `artworkUrl` field (which is the upstream URL when `artwork_cached=0`); the detail pages now do the same.
+- **Feed-detail and episode-detail pages now fall back to the upstream artwork URL when SparkyPod's cache is empty.** Both pages hard-coded `src={`/api/v1/feeds/${slug}/artwork`}`, which serves a 404 (and the fallback grey-checkmark SVG) when the cached file is missing. `FeedCard` already preferred the API-supplied `artworkUrl` field (which is the upstream URL when `artwork_cached=0`); the detail pages now do the same.
 - **Episode rows now display the show artwork as a thumbnail.** Previously each `EpisodeRow` showed only title + description + status. The 64x64 show-artwork thumbnail is threaded through `EpisodeList` from `FeedDetail` via a new optional `feedArtworkUrl` prop, falling back to the cached endpoint when no upstream URL is available.
 - **Default artwork-cache size cap raised from 5 MB to 25 MB.** The 5 MB default was rejecting common 3000x3000 JPEG and PNG covers, leaving operators with a 404 from the artwork endpoint and the grey-checkmark fallback in the UI. Animated GIF covers over 25 MB (e.g. the Podcasting 2.0 reference feed ships a ~40 MB GIF) still get rejected at cache time; the frontend now falls back to the upstream URL for those. Operators concerned about per-feed disk usage can lower the cap with the existing `MINUSPOD_MAX_ARTWORK_BYTES` env var (floor 64 KB, hard ceiling 50 MB).
 - **Add-feed slug auto-derivation failed silently on UA-strict feed hosts.** `fetch_feed` did not send `APP_USER_AGENT` to `safe_get` (only `fetch_feed_conditional` did), so the title-fetch step in `add_feed` returned None whenever a host (e.g. `feeds.podcastindex.org`) rejected the default `python-requests` UA with 403. The endpoint then refused to auto-derive a slug and forced the user to supply one manually. `fetch_feed` now passes `APP_USER_AGENT` on both the initial request and the gzip-decode retry, matching `fetch_feed_conditional`. As a defense-in-depth fallback, `add_feed` now also derives a slug from the URL path when the title fetch produces nothing, mirroring the OPML-import behavior. The duplicate URL-fallback block in `import_opml` was deduplicated into a shared `_slug_from_url_path` helper.
@@ -842,11 +842,11 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 ### Added
 
 - **Channel-level Podcasting 2.0 tag handling.** Every served feed now emits a minted `podcast:guid` (deterministic UUIDv5 over the served URL, per the Podcast Namespace spec), a `podcast:locked` tag defaulting to `yes` when upstream is silent (discourages re-import of private re-feeds), and a `<podcast:txt purpose="ai-content">true</podcast:txt>` disclosure that the audio was algorithmically re-cut. Safe channel tags (`funding`, `podroll`, `license`, `medium`, `person`, `updateFrequency`, `season`, `episode`, `trailer`, `images`, `image`, `socialInteract`, `value`/`valueRecipient`/`valueTimeSplit`, free-form `txt`) pass through verbatim with attribute values re-escaped to prevent feed corruption from upstream `&` characters. The parser accepts every spec-equivalent xmlns URI form (canonical `podcastindex.org` plus both `github.com/Podcastindex-org/podcast-namespace/blob/{main,master}/docs/1.0.md` forms and their `http://` variants), so feeds like the reference `pc20.xml` that declare the GitHub-blob URI are handled correctly. See [docs/podcasting-2.0.md](docs/podcasting-2.0.md) for the full pass/regenerate/strip rationale.
-- **Strip list for channel tags that would lie about the re-cut audio.** `podcast:integrity`, `soundbite`, `liveItem`, `alternateEnclosure`, `source`, and any upstream `podcast:guid` are dropped from the served feed (MinusPod mints its own GUID). `podcast:txt` with `purpose="verify"` or `purpose="applepodcastsverify"` is also stripped to avoid leaking the upstream publisher's ownership token through MinusPod. `podcast:podping` is deliberately never emitted: Podping publishes the feed URL to a public blockchain, which is the wrong shape for private re-feeds.
+- **Strip list for channel tags that would lie about the re-cut audio.** `podcast:integrity`, `soundbite`, `liveItem`, `alternateEnclosure`, `source`, and any upstream `podcast:guid` are dropped from the served feed (SparkyPod mints its own GUID). `podcast:txt` with `purpose="verify"` or `purpose="applepodcastsverify"` is also stripped to avoid leaking the upstream publisher's ownership token through SparkyPod. `podcast:podping` is deliberately never emitted: Podping publishes the feed URL to a public blockchain, which is the wrong shape for private re-feeds.
 
 ### Changed
 
-- **CPU image now ships as a multi-arch manifest covering `linux/amd64` and `linux/arm64` (issue #256).** Users on Raspberry Pi 5, Ampere, Graviton, M-series Macs, and other arm64 hosts can pull `ttlequals0/minuspod:<version>-cpu` or `:cpu` without docker-compose's amd64 emulation; Docker auto-selects the matching variant at pull time. GPU image (`Dockerfile`, `:<version>`, `:latest`) stays amd64-only because NVIDIA's arm64 CUDA images target Jetson, not generic arm64 cloud hosts.
+- **CPU image now ships as a multi-arch manifest covering `linux/amd64` and `linux/arm64` (issue #256).** Users on Raspberry Pi 5, Ampere, Graviton, M-series Macs, and other arm64 hosts can pull `SimpleHonors/sparkypod:<version>-cpu` or `:cpu` without docker-compose's amd64 emulation; Docker auto-selects the matching variant at pull time. GPU image (`Dockerfile`, `:<version>`, `:latest`) stays amd64-only because NVIDIA's arm64 CUDA images target Jetson, not generic arm64 cloud hosts.
 - **CPU image build moves to a GitHub Actions workflow.** `.github/workflows/cpu-image.yml` runs the amd64 leg on `ubuntu-latest` and the arm64 leg on the free native `ubuntu-24.04-arm` runner (no QEMU), then merges both arch-specific digests into a single manifest list. Trigger: `gh workflow run cpu-image.yml -f version=<version>` after the GPU image lands; add `-f promote_cpu_tag=true` to also move the floating `:cpu` tag. Requires repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. The local `/build-and-push` flow stays as GPU-only.
 - **`docker-compose.cpu.yml` no longer pins `platform: linux/amd64`.** Docker now picks the matching arch from the published manifest list. Re-add the pin only to force amd64 emulation on an arm64 host.
 
@@ -957,7 +957,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 - **`/api/v1/patterns/import` mode validation moved to the route boundary** so the request -> bound-check -> response flow is visible to static analyzers; closes a py/reflective-xss false positive raised by CodeQL against a helper-side narrowing.
 - **`community_sync._fetch_manifest` now routes through `safe_http.safe_get(trust=OPERATOR_CONFIGURED)` with a 256 KB cap.** The manifest URL is a build-time constant today, but the wrapper protects any future setting that exposes it.
 - **`entrypoint.sh`** added `-xdev` to both `find` calls and a pre-check warning when `$DATA_DIR` is owned by a uid that's neither 0 nor `$APP_UID`. Warning-only this release so we see behavior on existing volumes before tightening to fatal.
-- **Container hardening:** `docker-compose.yml` and `docker-compose.cpu.yml` now set `security_opt: ["no-new-privileges:true"]` and `cap_drop: [ALL]` on the `minuspod` service. App already runs as UID 1000 via `setpriv`; no caps needed after start.
+- **Container hardening:** `docker-compose.yml` and `docker-compose.cpu.yml` now set `security_opt: ["no-new-privileges:true"]` and `cap_drop: [ALL]` on the `sparkypod` service. App already runs as UID 1000 via `setpriv`; no caps needed after start.
 - **Build reproducibility:** pinned `pip==25.2` and `setuptools==80.9.0` in both `Dockerfile` and `Dockerfile.cpu`.
 - **Supply-chain:** every `actions/*` and third-party GitHub Action in `.github/workflows/*.yml` pinned to a commit SHA (human-readable tag kept as a comment). Closes the floating-major-tag exposure flagged in the audit.
 - **Pre-commit hook:** ASCII-glyph guard blocks em-dashes, smart quotes, and U+2605; Bearer-token regex post-filtered to skip common placeholder strings (example/placeholder/test/your-/fixture/sample/dummy/fake/redacted/xxxxx).
@@ -989,7 +989,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 
 ### Security
 
-- **Replaced `gosu` with `setpriv` in `entrypoint.sh` and dropped the `gosu` package from both GPU and CPU images.** Clears 50 Go stdlib CVEs (3 CRITICAL, 19 HIGH, 26 MEDIUM, 2 LOW) that Ubuntu 24.04's `gosu 1.17` carries because it was compiled against Go stdlib 1.22.2. `setpriv` ships with `util-linux` in the base image, has no Go runtime, and is the upstream-recommended gosu alternative. The privilege-drop flags match gosu's defaults: `--reuid=minuspod --regid=minuspod --init-groups --inh-caps=-all`. The two remaining torch CVEs (local DoS, LOW + MEDIUM) need a torch 2.6.0 -> 2.8.0 upgrade and are tracked separately.
+- **Replaced `gosu` with `setpriv` in `entrypoint.sh` and dropped the `gosu` package from both GPU and CPU images.** Clears 50 Go stdlib CVEs (3 CRITICAL, 19 HIGH, 26 MEDIUM, 2 LOW) that Ubuntu 24.04's `gosu 1.17` carries because it was compiled against Go stdlib 1.22.2. `setpriv` ships with `util-linux` in the base image, has no Go runtime, and is the upstream-recommended gosu alternative. The privilege-drop flags match gosu's defaults: `--reuid=sparkypod --regid=sparkypod --init-groups --inh-caps=-all`. The two remaining torch CVEs (local DoS, LOW + MEDIUM) need a torch 2.6.0 -> 2.8.0 upgrade and are tracked separately.
 
 ## [2.4.7] - 2026-05-15
 
@@ -1019,8 +1019,8 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 
 ### Changed
 
-- **Submit-to-community is now a bundle download, not N prefilled PR tabs.** Picking "Submit to community" in the Export dialog opens a preview that lists which patterns will pass quality gates and which will not (with reasons). Confirming downloads a single `minuspod-submission-<id>.json` containing every passing pattern. You open one PR for the whole bundle in your fork. The old per-tab flow fell over at scale: 215 selected -> 8 tabs survived the popup blocker, 20 forced JSON downloads (each over the 7 KB URL limit), 187 silent 400s rendered as `[object Object]`.
-- The PR-side validator and the manifest builder both handle the new bundle format (`format: minuspod-community-submission`) by flattening `patterns[]` into per-pattern validations / manifest entries. Existing per-file submissions still work.
+- **Submit-to-community is now a bundle download, not N prefilled PR tabs.** Picking "Submit to community" in the Export dialog opens a preview that lists which patterns will pass quality gates and which will not (with reasons). Confirming downloads a single `sparkypod-submission-<id>.json` containing every passing pattern. You open one PR for the whole bundle in your fork. The old per-tab flow fell over at scale: 215 selected -> 8 tabs survived the popup blocker, 20 forced JSON downloads (each over the 7 KB URL limit), 187 silent 400s rendered as `[object Object]`.
+- The PR-side validator and the manifest builder both handle the new bundle format (`format: sparkypod-community-submission`) by flattening `patterns[]` into per-pattern validations / manifest entries. Existing per-file submissions still work.
 
 ### Added
 
@@ -1056,7 +1056,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 
 - **Reviewer-trim now actually trims** instead of rebuilding the template from one episode's transcription. `rewrite_pattern_from_bounds` takes the original AND new bounds, computes the head/tail transcript slices, and splices them out of the existing `text_template` only when they appear at its start/end. The earlier behavior (Operation 2 "full replace within threshold") was a misnomer: it fit the template to a single episode and risked breaking matches on episodes that had captured the cleaner version. `intro_variants` / `outro_variants` get the same prefix/suffix trim so they stay aligned. Returns False when neither head nor tail slice matches the existing template, leaving the pattern untouched.
 - **`community_sync.apply_manifest` now reads `manifest['vocabulary_version']`.** When the manifest carries a vocabulary newer than the app's, the sync writes a warning to the log and a `vocabulary_warning` field into `community_sync_last_summary` so the operator can spot a stale image. Non-integer values are caught and logged cleanly instead of crashing the sync.
-- **Hardcoded `ttlequals0/MinusPod` is now a single constant.** `GITHUB_REPO` and `COMMUNITY_MANIFEST_URL` live in `src/utils/community_tags.py`; the export pipeline and sync job both import from there. One source of truth for the upstream identity.
+- **Hardcoded `SimpleHonors/sparkypod` is now a single constant.** `GITHUB_REPO` and `COMMUNITY_MANIFEST_URL` live in `src/utils/community_tags.py`; the export pipeline and sync job both import from there. One source of truth for the upstream identity.
 - **`MANIFEST_VERSION` and `VOCABULARY_VERSION` moved out of `src/tools/generate_manifest.py`** (a build-time CLI) into `src/utils/community_tags.py` next to the vocabulary loader. Both the generator and the sync job import from there. Removes a wrong-direction runtime -> build-time layering import.
 - **`pattern_service.py` no longer imports from `api/`.** Switched the transcript helper to `from utils.text import extract_text_in_range` directly. Service layer importing from API layer was the wrong dependency direction and would have become a circular import.
 
@@ -1093,7 +1093,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 - **Community ad patterns.** Patterns can now be shared via the `patterns/community/` directory in the GitHub repository. A new "Submit to community" button on each local pattern row runs an export pipeline (quality gates, PII strip, sponsor classification, metadata strip) and opens a prefilled GitHub PR. A new GitHub Action validates incoming PRs against the same gates and a three-tier dedupe (95%+ duplicate, 75-95% variant, <75% distinct) before the maintainer reviews them.
 - **49-tag vocabulary + tagging system.** Sponsors and podcasts now carry tags from a 48-entry vocabulary (`src/seed_data/tag_vocabulary.csv`) plus a special `universal` flag for sponsors with broad appeal. Community patterns only enter the text-matching loop when their sponsor's tags overlap the podcast's tags, when the sponsor is `universal`, or when either side has no tags. Local patterns bypass tag filtering entirely.
 - **Authoritative sponsor seed.** A new schema migration loads 255 sponsors (with aliases and tags) from `src/seed_data/sponsors_final.csv`. Migration semantics: UPDATE on name match (preserves `ad_patterns.sponsor_id` FKs), INSERT new, soft-delete (`is_active=0`) any pre-existing sponsor whose name is not in the seed.
-- **Auto-pull / sync.** Optional opt-in: when enabled, the server polls `https://raw.githubusercontent.com/ttlequals0/MinusPod/main/patterns/community/index.json` on a configurable cron (default Sunday 3am UTC) and applies INSERT / UPDATE / DELETE against community patterns. The new "Protect from sync" toggle on each community pattern row pins it so a future manifest can't overwrite or delete it.
+- **Auto-pull / sync.** Optional opt-in: when enabled, the server polls `https://raw.githubusercontent.com/SimpleHonors/sparkypod/main/patterns/community/index.json` on a configurable cron (default Sunday 3am UTC) and applies INSERT / UPDATE / DELETE against community patterns. The new "Protect from sync" toggle on each community pattern row pins it so a future manifest can't overwrite or delete it.
 - **Reviewer-trim auto-rewrite.** When a reviewer narrows an ad's bounds by more than the configurable trim threshold (default 20 s), the local pattern's `text_template` and intro/outro variants are re-extracted from the new transcript bounds. Off by default for community patterns; toggleable in the new **Ad Reviewer** settings panel.
 - **iTunes category parsing.** RSS feed refresh now extracts `<itunes:category>` at both podcast and episode level and maps it through `src/seed_data/itunes_category_map.json` to the vocabulary tags above.
 - **API additions** under `/api/v1/`: `POST /patterns/bulk-delete`, `POST /patterns/bulk-disable` (both guarded by `confirm: true` + `expected_count`), `POST /patterns/{id}/submit-to-community`, `POST | DELETE /patterns/{id}/protect`, `GET | PUT /feeds/{slug}/tags`, `PUT /sponsors/{id}/tags`, `GET | PUT /settings/reviewer`, `GET | PUT /settings/community-sync`, `POST /community-patterns/sync`, `GET /community-patterns/sync-status`. Documented in `openapi.yaml` (now at version 2.4.0).
@@ -1440,7 +1440,7 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 
 ### Changed
 
-- Pre-work for an offline LLM benchmark that imports MinusPod modules directly. All changes are behavior-preserving for production:
+- Pre-work for an offline LLM benchmark that imports SparkyPod modules directly. All changes are behavior-preserving for production:
   - Lifted `_extract_json_ads_array` and `_parse_ads_from_response` from `AdDetector` instance methods to module-level functions in `src/ad_detector.py` (`extract_json_ads_array`, `parse_ads_from_response`). The 3 in-tree call sites are updated; no external callers existed. `parse_ads_from_response` gains an optional `sponsor_service` keyword arg (defaults to `None`) so the benchmark can call it without an `AdDetector` instance.
   - Lifted the per-window prompt assembly to a module-level `format_window_prompt(...)` function. Both first-pass detection and verification-pass loops now call it instead of duplicating the assembly inline.
   - Added a module-level `get_static_system_prompt()` that returns `DEFAULT_SYSTEM_PROMPT` + the static `SEED_SPONSORS` list -- a deterministic, source-controlled prompt for the benchmark. `AdDetector.get_system_prompt()` (the production instance method that loads stored prompts and merges DB-derived sponsors) is unchanged. The two functions live side-by-side; production never calls the module-level one.
@@ -1495,11 +1495,11 @@ Tag `2.5.0` was published to Docker Hub but pulled stale bytes through a Portain
 
 ### Added
 
-- `Dockerfile.cpu` and `docker-compose.cpu.yml` -- CPU-only variant for hosts without an NVIDIA GPU (issue #184). Drops the CUDA runtime base layer (~3.3 GB) and the bundled `nvidia-*` wheels (~2.8 GB) by installing the CPU torch wheels from `https://download.pytorch.org/whl/cpu`. Final image lands around 3 GB versus ~16 GB for the GPU image. Published to Docker Hub as `ttlequals0/minuspod:2.0.21-cpu` and the floating `:cpu` tag. Pull with `docker compose -f docker-compose.cpu.yml up -d`. The `:latest` tag still points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag. CPU transcription is slow -- for non-trivial feeds, set `WHISPER_BACKEND=openai-api` and point at Groq, OpenAI, or a self-hosted whisper.cpp server.
+- `Dockerfile.cpu` and `docker-compose.cpu.yml` -- CPU-only variant for hosts without an NVIDIA GPU (issue #184). Drops the CUDA runtime base layer (~3.3 GB) and the bundled `nvidia-*` wheels (~2.8 GB) by installing the CPU torch wheels from `https://download.pytorch.org/whl/cpu`. Final image lands around 3 GB versus ~16 GB for the GPU image. Published to Docker Hub as `SimpleHonors/sparkypod:2.0.21-cpu` and the floating `:cpu` tag. Pull with `docker compose -f docker-compose.cpu.yml up -d`. The `:latest` tag still points at the GPU image; CPU users should track `:cpu` or a versioned `-cpu` tag. CPU transcription is slow -- for non-trivial feeds, set `WHISPER_BACKEND=openai-api` and point at Groq, OpenAI, or a self-hosted whisper.cpp server.
 
 ### Changed
 
-- `docker-compose.cpu.yml` now pulls `ttlequals0/minuspod:cpu` from Docker Hub by default. The previous `build:` directive is left commented in place. Users who relied on the local build behavior need to uncomment the `build:` block (one-line edit) and pass `--build` to `docker compose up`.
+- `docker-compose.cpu.yml` now pulls `SimpleHonors/sparkypod:cpu` from Docker Hub by default. The previous `build:` directive is left commented in place. Users who relied on the local build behavior need to uncomment the `build:` block (one-line edit) and pass `--build` to `docker compose up`.
 
 ### Removed
 
@@ -1529,7 +1529,7 @@ Adds a Global Defaults group to the settings page (under "AI & Processing") that
 
 ## [2.0.19] - 2026-05-02
 
-Add a per-feed advanced toggle ([#181](https://github.com/ttlequals0/MinusPod/issues/181)) that hides upstream episodes whose database status is not `processed` from the served RSS feed. Default OFF (no behavior change). Auto-downloading podcast apps (e.g. AntennaPod) currently see new episodes immediately and request the rewritten audio URL while the episode is still in `discovered` / `processing` / `permanently_failed`, which surfaces a 503 as a download error rather than a transparent retry. With this toggle ON, the feed only exposes an episode once it has actually been processed.
+Add a per-feed advanced toggle ([#181](https://github.com/SimpleHonors/sparkypod/issues/181)) that hides upstream episodes whose database status is not `processed` from the served RSS feed. Default OFF (no behavior change). Auto-downloading podcast apps (e.g. AntennaPod) currently see new episodes immediately and request the rewritten audio URL while the episode is still in `discovered` / `processing` / `permanently_failed`, which surfaces a 503 as a download error rather than a transparent retry. With this toggle ON, the feed only exposes an episode once it has actually been processed.
 
 ### Added
 
@@ -1544,7 +1544,7 @@ Add a per-feed advanced toggle ([#181](https://github.com/ttlequals0/MinusPod/is
 
 ## [2.0.18] - 2026-04-29
 
-Fix [#179](https://github.com/ttlequals0/MinusPod/issues/179): non-English podcasts had nearly every segment flagged as an ad. The "Pre-detect non-English segments as automatic ads (DAI in other languages)" heuristic in `src/transcriber.py` looks at non-ASCII character ratio and Spanish-specific keywords to flag segments. It was designed to catch foreign-language ads inserted into English podcasts (Dynamic Ad Insertion targeting Spanish-speaking audiences) but had no awareness of the configured `whisper_language` setting, so it false-positived entire foreign-language episodes.
+Fix [#179](https://github.com/SimpleHonors/sparkypod/issues/179): non-English podcasts had nearly every segment flagged as an ad. The "Pre-detect non-English segments as automatic ads (DAI in other languages)" heuristic in `src/transcriber.py` looks at non-ASCII character ratio and Spanish-specific keywords to flag segments. It was designed to catch foreign-language ads inserted into English podcasts (Dynamic Ad Insertion targeting Spanish-speaking audiences) but had no awareness of the configured `whisper_language` setting, so it false-positived entire foreign-language episodes.
 
 The detector now runs only when we are confident the audio is English: configured `whisper_language='en'`, or `'auto'` mode where Whisper detected an English variant. For any explicit non-English language (`'es'`, `'pt-br'`, etc.) and for `'auto'` where Whisper detected non-English, the detector is skipped and the per-segment `is_foreign_language` flag is never set; downstream `_detect_foreign_language_ads` in `src/ad_detector.py` becomes a no-op without any change because it only acts on flagged segments.
 
@@ -1801,7 +1801,7 @@ Dependency rollup. No application-behavior changes. Every Dependabot PR open aft
 
 ## [2.0.0] - 2026-04-17 (security audit)
 
-Coordinated security hardening pass across the auth surface, crypto, SSRF, path containment, artwork validation, rate limits, container privileges, and log hygiene. Several breaking changes; operators should read the Removed and Security sections before deploying. The full audit plan lives in `tmp/MinusPod_Audit_Remediation_Plan.md`.
+Coordinated security hardening pass across the auth surface, crypto, SSRF, path containment, artwork validation, rate limits, container privileges, and log hygiene. Several breaking changes; operators should read the Removed and Security sections before deploying. The full audit plan lives in `tmp/SparkyPod_Audit_Remediation_Plan.md`.
 
 ### Added
 - CI workflow at `.github/workflows/ci.yml`: pytest on Python 3.11 with cached torch CPU wheels, frontend `npm run build` (runs `tsc` and `vite build`), `pip-audit`, and `npm audit`. Runs on every push to `main` / `feature/**` and on pull requests to `main`. Image build stays local (manual via `build-and-push`), so no Docker job in CI.
@@ -1845,7 +1845,7 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 - `/api/v1/status/stream` emits an application-level `event: auth-failed` message before closing when the session is missing or has lapsed. The frontend `GlobalStatusBar.tsx` handler listens for that event and redirects to `/ui/login`. Auth is revalidated on every keepalive tick.
 - `ad_detector._find_json_array_candidates` replaces the nested-alternation regex that previously scanned Claude responses. Linear-time bracket-depth scanner that tracks JSON string context, closing a theoretical ReDoS window under adversarial payloads.
 - `main_app.shared_state.permanently_failed_warned` is now a thread-safe `_BoundedSet(maxsize=10_000)` instead of an unbounded `set`.
-- Container no longer runs application code as root. The Dockerfile creates a `minuspod` user (UID/GID 1000) and installs `gosu`; the entrypoint starts as root so it can `chown` the data volume on first boot, then drops privileges via `exec gosu minuspod gunicorn`. First-boot chown uses `find ! -user $APP_UID` and logs the migrated count. `APP_UID` / `APP_GID` env vars override; `docker run --user <N>` bypasses chown/drop.
+- Container no longer runs application code as root. The Dockerfile creates a `sparkypod` user (UID/GID 1000) and installs `gosu`; the entrypoint starts as root so it can `chown` the data volume on first boot, then drops privileges via `exec gosu sparkypod gunicorn`. First-boot chown uses `find ! -user $APP_UID` and logs the migrated count. `APP_UID` / `APP_GID` env vars override; `docker run --user <N>` bypasses chown/drop.
 - `cryptography` minimum bumped from 46.0.5 to 46.0.7.
 - Startup backfill loops (`backfill_processing_history`, `backfill_patterns_from_corrections`, `deduplicate_patterns`, `extract_sponsors_for_patterns`) are now version-gated via a `system_settings` sentinel. They run on the first boot after a version bump and are skipped on every subsequent worker boot, avoiding a table scan on every gunicorn restart once the backfill has already run.
 - `RSSParser.fetch_feed` checks the response `Content-Type` against an allowlist (`application/rss+xml`, `application/atom+xml`, `application/xml`, `text/xml`, `application/octet-stream`). Missing headers are accepted because many legacy RSS hosts send none; explicit HTML or binary types are rejected before feedparser is invoked.
@@ -2158,8 +2158,8 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 ### Added
 - **Podcast search via PodcastIndex.org**: Search for podcasts by name directly from the Add Feed page. Requires free API credentials from api.podcastindex.org, configurable via Settings or environment variables.
 - **PodcastIndex settings section**: New "Podcast Discovery" section in Settings for managing API key and secret, with status badge.
-- **PWA support**: MinusPod is now installable as a Progressive Web App on mobile and desktop. Includes service worker with offline caching, app manifest, and home screen icons.
-- **OPML export with modified feed URLs**: Export feeds with MinusPod-served ad-free URLs for importing into podcast apps. Original URL export preserved as default.
+- **PWA support**: SparkyPod is now installable as a Progressive Web App on mobile and desktop. Includes service worker with offline caching, app manifest, and home screen icons.
+- **OPML export with modified feed URLs**: Export feeds with SparkyPod-served ad-free URLs for importing into podcast apps. Original URL export preserved as default.
 
 ### Changed
 - **Add Feed page redesigned**: Unified input field detects URLs vs. search queries automatically. Search results show artwork, author, and one-click add. Advanced options (slug, auto-process, max episodes) collapsed by default.
@@ -2430,13 +2430,13 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 ## [1.0.55] - 2026-03-13
 
 ### Fixed
-- **Remote whisper empty segments**: Removed `--convert` flag from `docker-compose.whisper.yml` -- whisper.cpp fails silently when it cannot write temp files to the CWD in Docker, returning 200 with 0 segments. MinusPod already sends preprocessed 16kHz mono WAV so conversion is unnecessary.
+- **Remote whisper empty segments**: Removed `--convert` flag from `docker-compose.whisper.yml` -- whisper.cpp fails silently when it cannot write temp files to the CWD in Docker, returning 200 with 0 segments. SparkyPod already sends preprocessed 16kHz mono WAV so conversion is unnecessary.
 - Added `working_dir: /tmp` to whisper compose service as a safety net for any temp file writes
 - Added `--no-flash-attn` to whisper compose so DTW word-level timestamps work (flash attention silently disables DTW)
 - Log warning when whisper API returns 200 with 0 usable segments, including raw response body for diagnosis
 
 ### Changed
-- README: Updated Remote Whisper section to document the `--convert` issue and note that MinusPod preprocesses audio to WAV
+- README: Updated Remote Whisper section to document the `--convert` issue and note that SparkyPod preprocesses audio to WAV
 
 ## [1.0.54] - 2026-03-13
 
@@ -2467,7 +2467,7 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 - **Database backup**: `GET /api/v1/system/backup` downloads a consistent SQLite backup (rate limited 6/hour)
 - **Outbound webhooks**: Configurable HTTP POST webhooks fired on `episode.processed` and `episode.failed` events
   - Custom Jinja2 payload templates for integration with any HTTP endpoint (Pushover, ntfy, n8n, etc.)
-  - Optional HMAC-SHA256 request signing via `X-MinusPod-Signature` header
+  - Optional HMAC-SHA256 request signing via `X-SparkyPod-Signature` header
   - Template validation and live preview via API and Settings UI
   - Fire-and-forget delivery with 2 retry attempts per webhook
 - **Webhook management UI**: Full CRUD in Settings > Webhooks section with template editor and test firing
@@ -2629,7 +2629,7 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 ## [1.0.41] - 2026-03-10
 
 ### Added
-- **Episode discovery**: All episodes from a feed are now surfaced in the MinusPod UI as `discovered` on every feed refresh. Users can process any episode at any time. Episode records persist indefinitely regardless of retention settings.
+- **Episode discovery**: All episodes from a feed are now surfaced in the SparkyPod UI as `discovered` on every feed refresh. Users can process any episode at any time. Episode records persist indefinitely regardless of retention settings.
 - **Bulk episode actions**: Select multiple episodes on the feed detail page and apply Process, Reprocess (Patterns + AI), Reprocess (Full), or Delete in one action. Bulk actions are page-scoped with per-action eligibility enforcement.
 - **Episode pagination**: Feed detail episode list is paginated (default 25 per page, options: 25 / 50 / 100 / 500).
 - **Per-feed RSS episode cap**: New `maxEpisodes` setting controls how many episodes are served to podcast clients (default 300, max 500). Configurable on add or via feed settings. Changing the cap triggers a full feed refresh.
@@ -2698,7 +2698,7 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 - **Initial RSS refresh runs in all workers**: Moved initial feed refresh inside the leader-election block so only the leader worker performs it, avoiding SQLite contention on startup.
 
 ### Added
-- **Audiobookshelf documentation**: Added README note about Audiobookshelf's SSRF filter blocking local MinusPod instances, with `SSRF_REQUEST_FILTER_WHITELIST` configuration instructions.
+- **Audiobookshelf documentation**: Added README note about Audiobookshelf's SSRF filter blocking local SparkyPod instances, with `SSRF_REQUEST_FILTER_WHITELIST` configuration instructions.
 - **Audiobookshelf ToC entry**: Added Audiobookshelf subsection link to README Table of Contents.
 
 ## [1.0.36] - 2026-03-03
@@ -2837,7 +2837,7 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 
 ### Changed
 - **Updated README**: Renamed "Transcript Editor" section to "Ad Editor" with updated feature descriptions covering time adjustment controls, reason panel, pill selector, and audio auto-seek. Removed outdated transcript-specific features (swipe gestures, double-tap/long-press boundary setting).
-- **Refreshed all screenshots**: Recaptured all 15 desktop and mobile screenshots from the live server reflecting the current UI with MinusPod logo, updated ad editor layout, and new time controls.
+- **Refreshed all screenshots**: Recaptured all 15 desktop and mobile screenshots from the live server reflecting the current UI with SparkyPod logo, updated ad editor layout, and new time controls.
 
 ## [1.0.23] - 2026-03-01
 
@@ -2864,9 +2864,9 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 ## [1.0.18] - 2026-02-27
 
 ### Added
-- **MinusPod logo in UI**: Header and login page now display the MinusPod logo (audio waveform bars with strike-through and wordmark) instead of plain text, with theme-aware light/dark variants
-- **New favicon**: Replaced generic microphone icon with the MinusPod waveform icon extracted from the logo
-- **README logo**: Added centered MinusPod logo at the top of README.md
+- **SparkyPod logo in UI**: Header and login page now display the SparkyPod logo (audio waveform bars with strike-through and wordmark) instead of plain text, with theme-aware light/dark variants
+- **New favicon**: Replaced generic microphone icon with the SparkyPod waveform icon extracted from the logo
+- **README logo**: Added centered SparkyPod logo at the top of README.md
 
 ## [1.0.17] - 2026-02-26
 
@@ -3030,10 +3030,10 @@ Coordinated security hardening pass across the auth surface, crypto, SSRF, path 
 
 ## [1.0.0] - 2026-02-14
 
-Major release: pipeline redesign, MinusPod rebrand, and ad detection overhaul.
+Major release: pipeline redesign, SparkyPod rebrand, and ad detection overhaul.
 
 ### Changed
-- **Renamed to MinusPod**: Service name, Docker image (`ttlequals0/minuspod`), frontend title, package name, API docs, README, and deployment docs all updated from "Podcast Server" / "podcast-server".
+- **Renamed to SparkyPod**: Service name, Docker image (`SimpleHonors/sparkypod`), frontend title, package name, API docs, README, and deployment docs all updated from "Podcast Server" / "podcast-server".
 - **Replaced two-pass architecture with verification pipeline**: The blind second pass is replaced by a post-cut verification pass that re-transcribes processed audio and runs detection with a "what doesn't belong" prompt. Missed ads are re-cut directly from pass 1 output.
 - **Audio signals as Claude prompt context**: Volume anomalies and DAI transition pairs are formatted as text and injected into Claude's per-window prompts instead of running as an independent post-detection step. Claude makes all ad/not-ad decisions with full audio evidence.
 - **Audio analysis always enabled**: Removed global `audioAnalysisEnabled` toggle and per-feed `audioAnalysisOverride`. Volume analysis via ffmpeg is lightweight and always runs.
@@ -3086,7 +3086,7 @@ Major release: pipeline redesign, MinusPod rebrand, and ad detection overhaul.
 - **Processed transcript text storage** (Phase 20): New `generate_text()` method on TranscriptGenerator produces a `[HH:MM:SS.sss --> HH:MM:SS.sss] text` format stored in the database after processing. This is the ad-free, timestamp-adjusted transcript used by search indexing.
 
 ### Changed
-- **Renamed to MinusPod** (Phase 22): Service name, Docker image, frontend title, package name, API docs title, README heading, and deployment docs all updated from "Podcast Server" / "podcast-server" to "MinusPod" / "minuspod".
+- **Renamed to SparkyPod** (Phase 22): Service name, Docker image, frontend title, package name, API docs title, README heading, and deployment docs all updated from "Podcast Server" / "podcast-server" to "SparkyPod" / "sparkypod".
 - **Pass label text in UI** (Phase 20): Detection stage labels changed from "first pass" / "verification" to "pass 1" / "pass 2" for consistency.
 
 ### Fixed

@@ -61,7 +61,7 @@ export function PatternImportDialog({ open, onClose, onComplete }: Props) {
       >
         <h2 className="text-lg font-semibold mb-3">Import patterns</h2>
         <p className="text-sm text-muted-foreground mb-4">
-          Upload a JSON file exported from MinusPod, or a single community-pattern JSON.
+          Upload a JSON file exported from SparkyPod, or a single community-pattern JSON.
         </p>
 
         <input

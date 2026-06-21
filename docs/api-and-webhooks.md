@@ -66,7 +66,7 @@ Key endpoints:
 
 ## Webhooks
 
-MinusPod fires an HTTP POST to configured URLs when episodes complete processing, permanently fail, or when LLM authentication fails. Works with any HTTP endpoint. Use a custom Jinja2 payload template to match the receiver's expected format.
+SparkyPod fires an HTTP POST to configured URLs when episodes complete processing, permanently fail, or when LLM authentication fails. Works with any HTTP endpoint. Use a custom Jinja2 payload template to match the receiver's expected format.
 
 Configure webhooks in **Settings > Webhooks** in the web UI, or via the REST API.
 
@@ -129,7 +129,7 @@ Custom payload templates are Jinja2 strings rendered against these variables:
 
 ### Default Payloads
 
-When no custom template is configured, MinusPod sends these JSON payloads.
+When no custom template is configured, SparkyPod sends these JSON payloads.
 
 **Episode Processed:**
 
@@ -215,13 +215,13 @@ When no custom template is configured, MinusPod sends these JSON payloads.
 
 ### Example: Pushover
 
-Pushover supports native webhook ingestion with data extraction selectors. No custom payload template needed. MinusPod's default JSON payload works directly.
+Pushover supports native webhook ingestion with data extraction selectors. No custom payload template needed. SparkyPod's default JSON payload works directly.
 
-1. Log in to [pushover.net/dashboard](https://pushover.net/dashboard), scroll to "Your Webhooks", click "Create a Webhook". Name it MinusPod.
+1. Log in to [pushover.net/dashboard](https://pushover.net/dashboard), scroll to "Your Webhooks", click "Create a Webhook". Name it SparkyPod.
 2. Copy the unique webhook URL.
-3. In MinusPod Settings > Webhooks: paste the URL, select events, **leave payload template blank**.
-4. Click Test in MinusPod to fire a sample payload to Pushover.
-5. In Pushover dashboard: click "Check for Update" in Last Payload to load MinusPod's JSON.
+3. In SparkyPod Settings > Webhooks: paste the URL, select events, **leave payload template blank**.
+4. Click Test in SparkyPod to fire a sample payload to Pushover.
+5. In Pushover dashboard: click "Check for Update" in Last Payload to load SparkyPod's JSON.
 6. Configure data extraction selectors:
 
 | Field | Selector |
@@ -229,7 +229,7 @@ Pushover supports native webhook ingestion with data extraction selectors. No cu
 | Title | `{{podcast.name}} - {{event}}` |
 | Body | `{{episode.title}}`<br>`{{episode.ads_removed}} ads removed. Saved {{episode.time_saved}}. Cost {{episode.llm_cost_display}}` |
 | URL | `{{episode.url}}` |
-| URL Title | `Open in MinusPod` |
+| URL Title | `Open in SparkyPod` |
 
 7. Click "Test Selectors on Last Payload" to preview, then Save.
 
@@ -252,11 +252,11 @@ ntfy requires a custom payload template to match its expected JSON format.
      }
      ```
 
-> ntfy also supports header-based delivery (`X-Title`, `X-Message`, `X-Click` headers with plain text body); either approach works with MinusPod's template system.
+> ntfy also supports header-based delivery (`X-Title`, `X-Message`, `X-Click` headers with plain text body); either approach works with SparkyPod's template system.
 
 ### Request Signing
 
-If a webhook has a secret configured, MinusPod adds an `X-MinusPod-Signature: sha256=<hmac>` header to each POST, computed with HMAC-SHA256 over the request body.
+If a webhook has a secret configured, SparkyPod adds an `X-SparkyPod-Signature: sha256=<hmac>` header to each POST, computed with HMAC-SHA256 over the request body.
 
 ---
 

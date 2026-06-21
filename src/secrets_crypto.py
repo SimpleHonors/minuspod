@@ -259,7 +259,7 @@ def encrypt_bytes(db, plaintext: bytes) -> bytes:
 def decrypt_bytes(db, envelope: bytes) -> bytes:
     """Inverse of :func:`encrypt_bytes`. Rejects data without the magic tag."""
     if not envelope.startswith(_BACKUP_MAGIC):
-        raise ValueError("not a MinusPod encrypted-backup envelope")
+        raise ValueError("not a SparkyPod encrypted-backup envelope")
     body = envelope[len(_BACKUP_MAGIC):]
     if len(body) < _NONCE_LEN + 16:
         raise ValueError("envelope too short")

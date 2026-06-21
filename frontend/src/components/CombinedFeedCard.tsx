@@ -8,7 +8,7 @@ import CopyButton from './CopyButton';
  * Renders the unified `/all` feed at the top of the Feeds list.
  *
  * Surface:
- * - MinusPod logo as artwork (matches the channel <itunes:image> served at /all)
+ * - SparkyPod logo as artwork (matches the channel <itunes:image> served at /all)
  * - Subscribe URL with Copy button (uses the shared CopyButton, which handles
  *   the navigator.clipboard insecure-context fallback)
  * - Episode-limit input that auto-saves on blur via PUT /api/v1/settings
@@ -61,7 +61,7 @@ function CombinedFeedCard() {
         <div className="w-24 h-24 shrink-0 bg-secondary/40 flex items-center justify-center p-3">
           <img
             src={logoSrc}
-            alt="MinusPod"
+            alt="SparkyPod"
             className="w-full h-full object-contain"
           />
         </div>
@@ -76,7 +76,7 @@ function CombinedFeedCard() {
           </div>
           <p className="text-sm text-muted-foreground mt-1">
             Subscribe to <code>/all</code> in your podcast app to receive the most-recent
-            processed episodes from every show in MinusPod, newest first.
+            processed episodes from every show in SparkyPod, newest first.
           </p>
           <div className="mt-3 flex items-center gap-2">
             <label

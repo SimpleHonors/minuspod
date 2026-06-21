@@ -101,7 +101,7 @@ function DataManagementSection({
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-foreground">OPML Export</h4>
               <p className="text-xs text-muted-foreground mt-1">
-                Export feed subscriptions as OPML. Modified feeds use MinusPod ad-free URLs; original feeds use upstream source URLs.
+                Export feed subscriptions as OPML. Modified feeds use SparkyPod ad-free URLs; original feeds use upstream source URLs.
               </p>
             </div>
           </div>

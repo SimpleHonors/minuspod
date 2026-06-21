@@ -12,7 +12,7 @@ def write(tmp_path: Path, body: str) -> Path:
 
 def test_minimal_valid_config(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "https://example.com"
 password_env = "PASSWORD"
 
@@ -29,7 +29,7 @@ provider = "openrouter"
 path = "data/corpus"
 """)
     cfg = config.load(p)
-    assert cfg.minuspod.base_url == "https://example.com"
+    assert cfg.sparkypod.base_url == "https://example.com"
     assert cfg.providers["openrouter"].client == "openai_compatible"
     assert len(cfg.models) == 1
     assert cfg.models[0].id == "anthropic/claude-sonnet-4.6"
@@ -39,7 +39,7 @@ path = "data/corpus"
 
 def test_corpus_path_resolves_relative_to_config(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.openrouter]
@@ -62,13 +62,13 @@ def test_missing_file(tmp_path):
 
 def test_missing_minuspod_section(tmp_path):
     p = write(tmp_path, "")
-    with pytest.raises(config.ConfigError, match="\\[minuspod\\]"):
+    with pytest.raises(config.ConfigError, match="\\[sparkypod\\]"):
         config.load(p)
 
 
 def test_invalid_provider_client(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.bad]
@@ -84,7 +84,7 @@ provider = "bad"
 
 def test_model_references_undeclared_provider(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.openrouter]
@@ -100,7 +100,7 @@ provider = "ghost"
 
 def test_no_models(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.openrouter]
@@ -113,7 +113,7 @@ api_key_env = "K"
 
 def test_deprecated_model_flag(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.openrouter]
@@ -145,7 +145,7 @@ def test_secret_present(monkeypatch):
 
 def test_model_provider_lookup(tmp_path):
     p = write(tmp_path, """
-[minuspod]
+[sparkypod]
 base_url = "x"
 password_env = "P"
 [providers.together]

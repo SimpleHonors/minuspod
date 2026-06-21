@@ -80,7 +80,7 @@ esac
 # Build SUMMARY.md
 SUMMARY="$RESULTS_DIR/SUMMARY.md"
 {
-    echo "# MinusPod smoke results"
+    echo "# SparkyPod smoke results"
     echo
     echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     echo

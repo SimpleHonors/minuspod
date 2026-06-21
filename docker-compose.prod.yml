@@ -1,5 +1,5 @@
 services:
-  minuspod:
+  sparkypod:
     networks:
       production_net:
         ipv4_address: ${MINUSPOD_IP:-192.168.1.100}

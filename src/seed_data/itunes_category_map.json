@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps iTunes podcast category strings (top-level and common subcategories) to MinusPod vocabulary tags. Match is case-insensitive. Unknown categories produce no tag.",
+  "_comment": "Maps iTunes podcast category strings (top-level and common subcategories) to SparkyPod vocabulary tags. Match is case-insensitive. Unknown categories produce no tag.",
   "Arts": "arts",
   "Books": "books",
   "Design": "arts",

@@ -1,6 +1,6 @@
-# MinusPod 2.0.0 smoke test harness
+# SparkyPod 2.0.0 smoke test harness
 
-Tests the deployed `ttlequals0/minuspod:2.0.0` image against the F01-F75
+Tests the deployed `SimpleHonors/sparkypod:2.0.0` image against the F01-F75
 security-audit checklist. Local instance is the same image as production.
 
 ## Layout
@@ -42,8 +42,8 @@ Default ports and creds:
 |-----|---------|
 | `LOCAL_BASE` | `http://localhost:8001` |
 | `LOCAL_PASSWORD` | `SmokeTestPass123!` |
-| `LOCAL_CONTAINER` | `minuspod-smoke` |
-| `LOCAL_VOLUME` | `minuspod-smoke-data` |
+| `LOCAL_CONTAINER` | `sparkypod-smoke` |
+| `LOCAL_VOLUME` | `sparkypod-smoke-data` |
 | `REMOTE_BASE` | `https://your-server.example.com` |
 | `REMOTE_COOKIES` | `./cookies.txt` |
 

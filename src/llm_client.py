@@ -1,5 +1,5 @@
 """
-LLM Client Abstraction for MinusPod
+LLM Client Abstraction for SparkyPod
 
 Supports multiple backends:
 - anthropic: Direct Anthropic API (default, uses API credits)

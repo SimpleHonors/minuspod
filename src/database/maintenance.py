@@ -1,4 +1,4 @@
-"""Maintenance and cleanup mixin for MinusPod database."""
+"""Maintenance and cleanup mixin for SparkyPod database."""
 import json
 import logging
 import re

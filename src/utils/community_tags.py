@@ -13,10 +13,10 @@ _SEED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'seed_data'
 
 UNIVERSAL_TAG = 'universal'
 
-# Single source of truth for the upstream MinusPod repo identity. Used by
+# Single source of truth for the upstream SparkyPod repo identity. Used by
 # both the export pipeline's prefilled-PR URL builder and the sync job's
 # manifest fetch URL.
-GITHUB_REPO = 'ttlequals0/MinusPod'
+GITHUB_REPO = 'SimpleHonors/sparkypod'
 # Per-pattern files and the index live side by side under this directory; the
 # sync client builds each per-pattern fetch URL as COMMUNITY_PATTERN_BASE_URL +
 # the index entry's `path`.
@@ -48,9 +48,9 @@ def content_hash_for_bytes(raw: bytes) -> str:
 # builder (community_export.build_bundle), the PR-side validator, and the
 # manifest generator. Single source of truth so the three modules can't
 # drift on the spelling.
-BUNDLE_FORMAT = 'minuspod-community-submission'
+BUNDLE_FORMAT = 'sparkypod-community-submission'
 BUNDLE_VERSION = 1
-BUNDLE_NAME_PREFIX = 'minuspod-submission-'
+BUNDLE_NAME_PREFIX = 'sparkypod-submission-'
 
 
 def iter_bundle_patterns(raw):

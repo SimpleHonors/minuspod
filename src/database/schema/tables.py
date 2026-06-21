@@ -1,4 +1,4 @@
-"""SQL DDL constants for MinusPod database schema.
+"""SQL DDL constants for SparkyPod database schema.
 
 SCHEMA_SQL: Full initial schema (CREATE TABLE / CREATE INDEX) executed on
 fresh databases via conn.executescript(SCHEMA_SQL).

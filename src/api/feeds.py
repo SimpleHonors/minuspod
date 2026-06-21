@@ -440,7 +440,7 @@ def export_opml():
 
     opml = ET.Element('opml', version='2.0')
     head = ET.SubElement(opml, 'head')
-    ET.SubElement(head, 'title').text = 'MinusPod Feeds'
+    ET.SubElement(head, 'title').text = 'SparkyPod Feeds'
     body = ET.SubElement(opml, 'body')
 
     for podcast in podcasts:
@@ -458,7 +458,7 @@ def export_opml():
     xml_bytes = ET.tostring(opml, encoding='unicode', xml_declaration=False)
     xml_output = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
 
-    filename = 'minuspod-feeds.opml' if mode == 'original' else 'minuspod-feeds-modified.opml'
+    filename = 'sparkypod-feeds.opml' if mode == 'original' else 'sparkypod-feeds-modified.opml'
     logger.info(f"Exported {len(podcasts)} feeds as OPML (mode={mode})")
 
     return Response(

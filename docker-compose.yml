@@ -1,12 +1,12 @@
 services:
-  minuspod:
-    image: ttlequals0/minuspod:${MINUSPOD_VERSION:-latest}
+  sparkypod:
+    image: SimpleHonors/sparkypod:${MINUSPOD_VERSION:-latest}
     platform: linux/amd64
     # Pin MAC to c8:ff:bf:05:dd:e2 so client ARP caches survive container recreate.
     # Without this, macvlan/ipvlan assigns a random MAC on every rebuild and
     # stale client ARP entries make the UI unreachable until caches expire.
     mac_address: c8:ff:bf:05:dd:e2
-    # The container ships a non-root `minuspod` user at UID/GID 1000
+    # The container ships a non-root `sparkypod` user at UID/GID 1000
     # (entrypoint.sh drops root via setpriv after fixing volume ownership).
     # Override here to pin a specific APP_UID/APP_GID if your volume is
     # owned by a different user -- e.g. `user: "2000:2000"`. Leave unset
@@ -171,7 +171,7 @@ services:
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     depends_on:
-      - minuspod
+      - sparkypod
     logging:
       driver: json-file
       options:

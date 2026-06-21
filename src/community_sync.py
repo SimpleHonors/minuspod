@@ -1,6 +1,6 @@
 """Community pattern auto-pull / sync.
 
-Fetches https://raw.githubusercontent.com/ttlequals0/MinusPod/main/patterns/community/index.json
+Fetches https://raw.githubusercontent.com/SimpleHonors/sparkypod/main/patterns/community/index.json
 on a configurable cron schedule. Applies INSERT / UPDATE / DELETE semantics
 against ad_patterns rows tagged `source='community'`, respecting the
 `protected_from_sync` flag.

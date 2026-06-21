@@ -154,7 +154,7 @@ class TestPrepareAndDispatchSigning:
 
     @patch('webhook_service.safe_post')
     def test_prepare_and_dispatch_with_secret(self, mock_post):
-        """X-MinusPod-Signature header is added when secret is set."""
+        """X-SparkyPod-Signature header is added when secret is set."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_post.return_value = mock_resp
@@ -165,8 +165,8 @@ class TestPrepareAndDispatchSigning:
 
         call_kwargs = mock_post.call_args
         headers = call_kwargs.kwargs.get('headers', {})
-        assert 'X-MinusPod-Signature' in headers
-        assert headers['X-MinusPod-Signature'].startswith('sha256=')
+        assert 'X-SparkyPod-Signature' in headers
+        assert headers['X-SparkyPod-Signature'].startswith('sha256=')
 
     @patch('webhook_service.safe_post')
     def test_prepare_and_dispatch_no_secret(self, mock_post):
@@ -181,7 +181,7 @@ class TestPrepareAndDispatchSigning:
 
         call_kwargs = mock_post.call_args
         headers = call_kwargs.kwargs.get('headers', {})
-        assert 'X-MinusPod-Signature' not in headers
+        assert 'X-SparkyPod-Signature' not in headers
 
     @patch('webhook_service.safe_post')
     def test_prepare_and_dispatch_ssrf_blocked(self, mock_post):

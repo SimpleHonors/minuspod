@@ -20,16 +20,16 @@ Instead of using API credits, you can use the [Claude Code OpenAI Wrapper](https
    docker compose --profile wrapper run --rm claude-wrapper claude auth login
    ```
 
-3. Configure minuspod to use the wrapper by updating your `.env`:
+3. Configure sparkypod to use the wrapper by updating your `.env`:
    ```bash
    LLM_PROVIDER=openai-compatible
    OPENAI_BASE_URL=http://claude-wrapper:8000/v1
    OPENAI_API_KEY=not-needed
    ```
 
-4. Restart minuspod:
+4. Restart sparkypod:
    ```bash
-   docker compose up -d minuspod
+   docker compose up -d sparkypod
    ```
 
 **Other OpenAI-Compatible Endpoints:**
@@ -52,7 +52,7 @@ Note: The AI model is configured via the Settings UI, not environment variables.
 
 ## Using Ollama (Local or Cloud)
 
-[Ollama](https://ollama.com) is an alternative to the Anthropic API. MinusPod supports both flavors:
+[Ollama](https://ollama.com) is an alternative to the Anthropic API. SparkyPod supports both flavors:
 
 - **Local** (`http://host:11434`): no auth, no API costs, nothing leaves the machine.
 - **Cloud** (`https://ollama.com/api`): same OpenAI-compatible endpoints, just with `Authorization: Bearer <key>` on every request. Free tier works for this pipeline. Grab a key at [ollama.com/settings/keys](https://ollama.com/settings/keys).
@@ -172,7 +172,7 @@ The LLM only sees host-read ads that blend into content, new sponsors not yet in
 
 ### JSON Reliability Risks
 
-MinusPod's ad detection pipeline requires models to return structured JSON. The Anthropic API enforces this reliably. With Ollama or any open-weights serving, enforcement is model-dependent and failures are more likely.
+SparkyPod's ad detection pipeline requires models to return structured JSON. The Anthropic API enforces this reliably. With Ollama or any open-weights serving, enforcement is model-dependent and failures are more likely.
 
 Failure modes:
 
@@ -219,13 +219,13 @@ Any [OpenRouter model ID](https://openrouter.ai/models) works:
 - `openrouter/free`: router alias that picks a free model per request
 - `openrouter/auto`: router alias that picks the best model for the prompt
 
-The `openrouter/free` and `openrouter/auto` aliases are not in OpenRouter's `/api/v1/models` list, so MinusPod adds them to the dropdown for you. Other unlisted model IDs can still be seeded with `OPENAI_MODEL` on first startup.
+The `openrouter/free` and `openrouter/auto` aliases are not in OpenRouter's `/api/v1/models` list, so SparkyPod adds them to the dropdown for you. Other unlisted model IDs can still be seeded with `OPENAI_MODEL` on first startup.
 
 All of these can be changed at runtime from the Settings UI. No container restart needed.
 
 ## LLM Pricing
 
-MinusPod tracks token usage and cost for every LLM call. The Settings page and `GET /api/v1/system/token-usage` show per-model breakdowns.
+SparkyPod tracks token usage and cost for every LLM call. The Settings page and `GET /api/v1/system/token-usage` show per-model breakdowns.
 
 ### Where pricing data comes from
 
@@ -256,11 +256,11 @@ Different sources use different names for the same model. A normalization step s
 
 ### Offline / air-gapped installs
 
-If the pricing fetch fails on startup and no pricing data exists in the database, MinusPod seeds from a built-in table of Anthropic model prices. Non-Anthropic models will show $0 until the next successful fetch. Existing cached pricing in the database is never lost on fetch failure.
+If the pricing fetch fails on startup and no pricing data exists in the database, SparkyPod seeds from a built-in table of Anthropic model prices. Non-Anthropic models will show $0 until the next successful fetch. Existing cached pricing in the database is never lost on fetch failure.
 
 ### Pricing accuracy
 
-Pricing data comes from third-party sources and may lag behind provider announcements. Check your provider's billing dashboard for authoritative cost figures. MinusPod's cost tracking is an estimate for convenience, not a billing system.
+Pricing data comes from third-party sources and may lag behind provider announcements. Check your provider's billing dashboard for authoritative cost figures. SparkyPod's cost tracking is an estimate for convenience, not a billing system.
 
 ---
 

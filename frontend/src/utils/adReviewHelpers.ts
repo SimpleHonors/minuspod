@@ -2,7 +2,7 @@
 // here keeps the modal focused on composition and lets us unit-test the
 // pure pieces without mounting React.
 
-export const PLAY_WHILE_DRAG_KEY = 'minuspod.adInbox.playWhileDragging';
+export const PLAY_WHILE_DRAG_KEY = 'sparkypod.adInbox.playWhileDragging';
 
 // Parse user-entered timestamp text. Accepts either `MM:SS[.s]` (or
 // `H:MM:SS[.s]`) or a raw seconds value like `139.4`. Returns null on

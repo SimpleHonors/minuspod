@@ -1,4 +1,4 @@
-"""Audio fingerprint mixin for MinusPod database."""
+"""Audio fingerprint mixin for SparkyPod database."""
 import logging
 from typing import Optional, Dict, List
 

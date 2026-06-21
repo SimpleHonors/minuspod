@@ -1,7 +1,7 @@
 """Split a community-submission bundle into per-pattern files.
 
 The in-app exporter packages multiple patterns into one bundle file
-(`minuspod-submission-<id>.json`). The maintainer prefers per-pattern
+(`sparkypod-submission-<id>.json`). The maintainer prefers per-pattern
 files in `patterns/community/` (one file = one ad). This tool reads a
 bundle and writes each contained pattern to its canonical
 `<slug>-<short_uuid>.json` filename using the same slugify logic the
@@ -9,7 +9,7 @@ validator enforces.
 
 Usage:
 
-    python -m src.tools.split_bundle patterns/community/minuspod-submission-abc.json
+    python -m src.tools.split_bundle patterns/community/sparkypod-submission-abc.json
     python -m src.tools.split_bundle path/to/bundle.json --keep-original
 """
 from __future__ import annotations

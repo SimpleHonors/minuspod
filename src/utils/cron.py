@@ -1,4 +1,4 @@
-"""Minimal 5-field cron evaluator for MinusPod's community-sync schedule.
+"""Minimal 5-field cron evaluator for SparkyPod's community-sync schedule.
 
 Supports the common cron syntax users will write -- numbers, '*', ranges,
 lists, and step values -- for the five standard fields:

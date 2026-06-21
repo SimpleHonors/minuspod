@@ -147,7 +147,7 @@ export interface TemplateValidationResult {
 // Data Management
 
 export async function exportOpml(mode: 'original' | 'modified' = 'original'): Promise<void> {
-  const fallback = mode === 'modified' ? 'minuspod-feeds-modified.opml' : 'minuspod-feeds.opml';
+  const fallback = mode === 'modified' ? 'sparkypod-feeds-modified.opml' : 'sparkypod-feeds.opml';
   const { blob, filename } = await apiFileRequest(`/feeds/export-opml?mode=${mode}`, {
     fallbackFilename: fallback,
   });
@@ -156,7 +156,7 @@ export async function exportOpml(mode: 'original' | 'modified' = 'original'): Pr
 
 export async function downloadBackup(): Promise<void> {
   const { blob, filename } = await apiFileRequest('/system/backup', {
-    fallbackFilename: 'minuspod-backup.db',
+    fallbackFilename: 'sparkypod-backup.db',
   });
   downloadBlob(blob, filename);
 }

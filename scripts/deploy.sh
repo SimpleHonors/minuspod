@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# Durable deploy script for MinusPod in production
+# Durable deploy script for SparkyPod in production
 # Pins the network, assigns fixed IP,
 # and aligns internal/external port to prevent UI lockouts.
 

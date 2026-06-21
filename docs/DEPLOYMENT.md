@@ -4,7 +4,7 @@
 
 ---
 
-This page covers running MinusPod in production: health monitoring, backups, updates, and the common operational issues. For first-time install see [Installation](installation.md); for the complete environment variable reference see [Environment Variables](environment-variables.md).
+This page covers running SparkyPod in production: health monitoring, backups, updates, and the common operational issues. For first-time install see [Installation](installation.md); for the complete environment variable reference see [Environment Variables](environment-variables.md).
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ This page covers running MinusPod in production: health monitoring, backups, upd
 - CUDA-capable GPU (GPU image only; CPU image runs without one)
 - An LLM API key (Anthropic, OpenRouter, OpenAI-compatible, or an Ollama instance)
 
-The GPU image is `ttlequals0/minuspod:<version>` and `:latest`. The CPU image is `ttlequals0/minuspod:<version>-cpu` and `:cpu`. See [Installation](installation.md) for variant selection.
+The GPU image is `SimpleHonors/sparkypod:<version>` and `:latest`. The CPU image is `SimpleHonors/sparkypod:<version>-cpu` and `:cpu`. See [Installation](installation.md) for variant selection.
 
 ## Minimum production environment
 
@@ -81,7 +81,7 @@ docker-compose restart
 docker info | grep -i nvidia
 
 # Check GPU visibility in container
-docker exec minuspod nvidia-smi
+docker exec sparkypod nvidia-smi
 ```
 
 If GPU not available, set `WHISPER_DEVICE=cpu` (slower but works).
@@ -95,7 +95,7 @@ There is no scheduled automatic backup. Use one of the two paths below.
 ```bash
 # Authenticated download via the API. Rate-limited to 6 requests/hour.
 curl -sS -b cookies.txt \
-  -o minuspod-backup-$(date +%Y%m%d-%H%M%S).db.enc \
+  -o sparkypod-backup-$(date +%Y%m%d-%H%M%S).db.enc \
   http://localhost:8000/api/v1/system/backup
 ```
 
@@ -108,7 +108,7 @@ When `MINUSPOD_MASTER_PASSPHRASE` is set, the response is AES-GCM encrypted (fil
 docker-compose stop
 
 # Snapshot the data directory (database, processed audio, status file)
-tar -czvf minuspod-backup-$(date +%Y%m%d).tar.gz data/
+tar -czvf sparkypod-backup-$(date +%Y%m%d).tar.gz data/
 
 docker-compose start
 ```
@@ -133,11 +133,11 @@ Migrations run on startup and are forward-compatible; restoring an older snapsho
 
 ```bash
 # GPU image
-docker pull ttlequals0/minuspod:latest
+docker pull SimpleHonors/sparkypod:latest
 docker-compose up -d
 
 # CPU image
-docker pull ttlequals0/minuspod:cpu
+docker pull SimpleHonors/sparkypod:cpu
 docker-compose -f docker-compose.cpu.yml up -d
 ```
 
@@ -147,13 +147,13 @@ Database migrations run automatically on startup. Take a backup (see above) befo
 
 ```bash
 # View all logs
-docker logs minuspod
+docker logs sparkypod
 
 # Follow logs
-docker logs -f minuspod
+docker logs -f sparkypod
 
 # Last 100 lines
-docker logs --tail 100 minuspod
+docker logs --tail 100 sparkypod
 ```
 
 ## Resource usage

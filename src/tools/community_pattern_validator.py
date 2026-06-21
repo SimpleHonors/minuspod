@@ -214,7 +214,7 @@ def _file_shape_warnings(path: str, raw: Dict[str, Any]) -> List[str]:
     - Bundle payload in a `<slug>-<short>.json`-shaped file: probably a hand
       split that forgot to flatten; the contained patterns will validate
       individually but the directory convention is per-pattern files.
-    - Per-pattern payload in a `minuspod-submission-*.json`-shaped file: the
+    - Per-pattern payload in a `sparkypod-submission-*.json`-shaped file: the
       contributor dropped a bundle filename on a single pattern; the manifest
       generator will still pick it up, but the directory convention should
       hold.

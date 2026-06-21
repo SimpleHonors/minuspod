@@ -1,7 +1,7 @@
 """Compute a Podcast Namespace `podcast:guid` for a served feed URL.
 
 The Podcast Namespace spec defines a deterministic UUIDv5 over the feed URL
-using a fixed namespace constant. A MinusPod feed is a derivative served at
+using a fixed namespace constant. A SparkyPod feed is a derivative served at
 its own URL, so we mint our own GUID instead of reusing the upstream one;
 this keeps aggregators from conflating the proxied feed with the origin.
 

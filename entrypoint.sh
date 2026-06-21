@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# MinusPod container entrypoint.
+# SparkyPod container entrypoint.
 #
 # The container is started as root because the data volume may be mounted
 # from a host path owned by a different UID (common on first run after a
 # docker compose pull, or after an operator recreates the volume). We fix
-# ownership, then drop privileges to the unprivileged minuspod user via
+# ownership, then drop privileges to the unprivileged sparkypod user via
 # setpriv (util-linux). Only root needs to live long enough to run this
 # script; gunicorn runs as UID 1000 (or APP_UID / APP_GID if overridden).
 #
@@ -23,10 +23,10 @@ mkdir -p "$DATA_DIR/backups"
 # ``docker run --user 2000``), skip the chown/drop steps; gunicorn runs
 # as whatever UID the caller requested.
 if [[ "$(id -u)" == "0" ]]; then
-    if [[ "$(id -u minuspod)" != "$APP_UID" ]] || [[ "$(id -g minuspod)" != "$APP_GID" ]]; then
-        echo "entrypoint: updating minuspod UID/GID -> ${APP_UID}/${APP_GID}"
-        groupmod -o -g "$APP_GID" minuspod
-        usermod -o -u "$APP_UID" -g "$APP_GID" minuspod
+    if [[ "$(id -u sparkypod)" != "$APP_UID" ]] || [[ "$(id -g sparkypod)" != "$APP_GID" ]]; then
+        echo "entrypoint: updating sparkypod UID/GID -> ${APP_UID}/${APP_GID}"
+        groupmod -o -g "$APP_GID" sparkypod
+        usermod -o -u "$APP_UID" -g "$APP_GID" sparkypod
     fi
 
     # Incremental chown: only touch files that aren't already owned by
@@ -60,7 +60,7 @@ if [[ "$(id -u)" == "0" ]]; then
     chown "${APP_UID}:${APP_GID}" /app/gunicorn.conf.py 2>/dev/null || true
 
     cd /app/src
-    exec setpriv --reuid=minuspod --regid=minuspod --init-groups --inh-caps=-all -- \
+    exec setpriv --reuid=sparkypod --regid=sparkypod --init-groups --inh-caps=-all -- \
         gunicorn -c /app/gunicorn.conf.py main_app:app
 fi
 

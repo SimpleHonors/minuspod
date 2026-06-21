@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmark.config import BenchmarkConfig, CorpusConfig, MinusPodConfig, ModelConfig, ProviderConfig, RunConfig
+from benchmark.config import BenchmarkConfig, CorpusConfig, SparkyPodConfig, ModelConfig, ProviderConfig, RunConfig
 from benchmark.corpus import Episode, EpisodeMetadata, Window
 from benchmark.pricing import ModelPrice, PricingSnapshot
 from benchmark.truth_parser import Ad, Truth
@@ -12,7 +12,7 @@ from benchmark.truth_parser import Ad, Truth
 @pytest.fixture
 def minimal_cfg() -> BenchmarkConfig:
     return BenchmarkConfig(
-        minuspod=MinusPodConfig(base_url="x", password_env="P", session_cache_path=None),  # type: ignore[arg-type]
+        sparkypod=SparkyPodConfig(base_url="x", password_env="P", session_cache_path=None),  # type: ignore[arg-type]
         providers={
             "openrouter": ProviderConfig(name="openrouter", client="openai_compatible", api_key_env="K", base_url="https://x"),
         },

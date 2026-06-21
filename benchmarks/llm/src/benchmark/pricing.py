@@ -1,6 +1,6 @@
-"""Reuse MinusPod's pricing_fetcher for both runtime cost tracking and snapshots.
+"""Reuse SparkyPod's pricing_fetcher for both runtime cost tracking and snapshots.
 
-`fetch_current` unions two sources from MinusPod's ``src/pricing_fetcher.py``:
+`fetch_current` unions two sources from SparkyPod's ``src/pricing_fetcher.py``:
 LiteLLM's curated JSON (covers anthropic_direct and most non-OpenRouter
 providers) and OpenRouter's ``/api/v1/models`` endpoint (authoritative for
 ``openrouter/<slug>`` entries and indexes new models faster than LiteLLM).

@@ -1,4 +1,4 @@
-"""Settings mixin for MinusPod database."""
+"""Settings mixin for SparkyPod database."""
 import os
 import logging
 from typing import Optional, Dict, Any, List

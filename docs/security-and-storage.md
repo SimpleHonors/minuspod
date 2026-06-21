@@ -10,7 +10,7 @@ The docker-compose includes an optional Cloudflare tunnel service for secure rem
 
 1. Create a tunnel at [Cloudflare Zero Trust](https://one.dash.cloudflare.com/)
 2. Add `TUNNEL_TOKEN` to your `.env` file
-3. Configure the tunnel to point to `http://minuspod:8000`
+3. Configure the tunnel to point to `http://sparkypod:8000`
 
 ### Before enabling the tunnel profile
 
@@ -29,7 +29,7 @@ The login lockout feature (5 fails / 15 min / 15 min block) keys on `request.rem
 - Direct exposure (no proxy, ports published): `remote_addr` is the client. No config needed.
 - Docker with published ports and no reverse proxy: `remote_addr` is the Docker bridge gateway; lockout will not fire. A startup WARN surfaces this. Deploy behind a proxy or switch to `network_mode: host`.
 - Behind Cloudflare, nginx, Traefik, or cloudflared: set `MINUSPOD_TRUSTED_PROXY_COUNT=1`. Cloudflare sets `X-Forwarded-For` automatically.
-- Multi-proxy chain (e.g., Cloudflare -> nginx -> MinusPod): set the count to the number of proxies you actually trust. Setting it too high lets an attacker spoof their client IP by prepending entries to `X-Forwarded-For`.
+- Multi-proxy chain (e.g., Cloudflare -> nginx -> SparkyPod): set the count to the number of proxies you actually trust. Setting it too high lets an attacker spoof their client IP by prepending entries to `X-Forwarded-For`.
 
 **What happens if you leave `MINUSPOD_TRUSTED_PROXY_COUNT=0` on a proxy-fronted deployment:**
 
@@ -51,7 +51,7 @@ Operator checklist:
 - `MINUSPOD_ENABLE_HSTS=true` once the deployment is HTTPS-only.
 - WAF block on `/ui` and `/api`. Public feed paths must stay reachable: `/<slug>`, `/episodes/<slug>/<episode>.mp3`, `.vtt`, `/chapters.json`, and `/api/v1/feeds/<slug>/artwork`.
 
-MinusPod ships the rest by default: CSRF, login lockout, SSRF guards, artwork magic-number validation, XXE defense, baseline security headers, non-root container, rate limits on destructive endpoints. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+SparkyPod ships the rest by default: CSRF, login lockout, SSRF guards, artwork magic-number validation, XXE defense, baseline security headers, non-root container, rate limits on destructive endpoints. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
 
 **Cloudflare WAF example.** Allow only Pocket Casts on the feed host, block admin paths:
 
@@ -78,7 +78,7 @@ All data is stored in the `./data` directory:
 
 ### Container user
 
-Runs as UID 1000 (`minuspod`). First boot chowns the data volume, then drops privileges via `setpriv` (from `util-linux`, present in the base image). Override with `APP_UID` / `APP_GID` if your host volume belongs to a different UID, or bypass entirely with `docker run --user <N>`.
+Runs as UID 1000 (`sparkypod`). First boot chowns the data volume, then drops privileges via `setpriv` (from `util-linux`, present in the base image). Override with `APP_UID` / `APP_GID` if your host volume belongs to a different UID, or bypass entirely with `docker run --user <N>`.
 
 ### Database backup sensitivity
 
@@ -117,7 +117,7 @@ Unencrypted `.db` files are regular SQLite databases. Restore them with `sqlite3
 Before doing a `replace` import, export first so there's a round-trip backup:
 
 ```bash
-curl -b cookies.txt https://your-minuspod/api/v1/patterns/export?include_corrections=true > patterns-backup.json
+curl -b cookies.txt https://your-sparkypod/api/v1/patterns/export?include_corrections=true > patterns-backup.json
 ```
 
 `POST /api/v1/patterns/import` runs validation on the entire payload before any writes and wraps the delete/update/insert pass in a single `BEGIN IMMEDIATE` transaction. A malformed entry or mid-transaction error rolls back to the pre-import state; `replace` mode can no longer leave an empty pattern table on a bad payload. Modes are `merge` (update matches, add new), `replace` (wipe then import), or `supplement` (add new only).

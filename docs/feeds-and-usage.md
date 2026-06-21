@@ -6,7 +6,7 @@
 
 ## Finding Podcast RSS Feeds
 
-MinusPod includes a built-in podcast search using [PodcastIndex.org](https://podcastindex.org). Search by name directly from the Add Feed page. To enable search, get free API credentials at [api.podcastindex.org/signup](https://api.podcastindex.org/signup) and add them in Settings > Podcast Search.
+SparkyPod includes a built-in podcast search using [PodcastIndex.org](https://podcastindex.org). Search by name directly from the Add Feed page. To enable search, get free API credentials at [api.podcastindex.org/signup](https://api.podcastindex.org/signup) and add them in Settings > Podcast Search.
 
 ![Podcast search on the Add Feed page, Dracula dark theme](images/podcast-search-dark.png)
 
@@ -31,17 +31,17 @@ The feed URL is shown in the web UI and can be copied to clipboard.
 
 ### Audiobookshelf
 
-If using [Audiobookshelf](https://www.audiobookshelf.org/) as your podcast client, its SSRF protection will block requests to MinusPod when running on a local/private network. Add your MinusPod hostname or IP to Audiobookshelf's whitelist:
+If using [Audiobookshelf](https://www.audiobookshelf.org/) as your podcast client, its SSRF protection will block requests to SparkyPod when running on a local/private network. Add your SparkyPod hostname or IP to Audiobookshelf's whitelist:
 
 ```
-SSRF_REQUEST_FILTER_WHITELIST=minuspod.local,192.168.1.100
+SSRF_REQUEST_FILTER_WHITELIST=sparkypod.local,192.168.1.100
 ```
 
 This is a comma-separated list of domains excluded from Audiobookshelf's SSRF filter. See [Audiobookshelf Security docs](https://www.audiobookshelf.org/docs/#security) for details.
 
 ### Feeds on a private or LAN host
 
-MinusPod validates feed source URLs and blocks private/loopback/LAN addresses by default (SSRF protection). If a feed source is on a private address (a LAN Audiobookshelf server or a self-hosted feed), set `MINUSPOD_ALLOW_PRIVATE_FEED_HOSTS=true`.
+SparkyPod validates feed source URLs and blocks private/loopback/LAN addresses by default (SSRF protection). If a feed source is on a private address (a LAN Audiobookshelf server or a self-hosted feed), set `MINUSPOD_ALLOW_PRIVATE_FEED_HOSTS=true`.
 
 ---
 

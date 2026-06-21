@@ -61,7 +61,7 @@ class TestOpmlExportModeValidation:
         mock_db.return_value.get_all_podcasts.return_value = []
         response = client.get('/api/v1/feeds/export-opml')
         assert response.status_code == 200
-        assert 'minuspod-feeds.opml' in response.headers['Content-Disposition']
+        assert 'sparkypod-feeds.opml' in response.headers['Content-Disposition']
 
 
 class TestOpmlExportOriginalMode:
@@ -83,7 +83,7 @@ class TestOpmlExportOriginalMode:
     def test_original_mode_filename(self, mock_db, client):
         mock_db.return_value.get_all_podcasts.return_value = []
         response = client.get('/api/v1/feeds/export-opml?mode=original')
-        assert 'minuspod-feeds.opml' in response.headers['Content-Disposition']
+        assert 'sparkypod-feeds.opml' in response.headers['Content-Disposition']
 
     @patch('api.feeds.get_database')
     def test_original_mode_title_fallback_to_slug(self, mock_db, client):
@@ -97,7 +97,7 @@ class TestOpmlExportOriginalMode:
 
 
 class TestOpmlExportModifiedMode:
-    """Tests for mode=modified (MinusPod ad-free URLs)."""
+    """Tests for mode=modified (SparkyPod ad-free URLs)."""
 
     @patch('api.feeds.get_database')
     def test_modified_mode_uses_base_url_and_slug(self, mock_db, client):
@@ -115,7 +115,7 @@ class TestOpmlExportModifiedMode:
     def test_modified_mode_filename(self, mock_db, client):
         mock_db.return_value.get_all_podcasts.return_value = []
         response = client.get('/api/v1/feeds/export-opml?mode=modified')
-        assert 'minuspod-feeds-modified.opml' in response.headers['Content-Disposition']
+        assert 'sparkypod-feeds-modified.opml' in response.headers['Content-Disposition']
 
     @patch('api.feeds.get_database')
     def test_modified_mode_strips_trailing_slash(self, mock_db, client):
@@ -152,7 +152,7 @@ class TestOpmlExportStructure:
         root = _parse_opml(response.data)
         assert root.tag == 'opml'
         assert root.get('version') == '2.0'
-        assert root.find('head/title').text == 'MinusPod Feeds'
+        assert root.find('head/title').text == 'SparkyPod Feeds'
         assert root.find('body') is not None
 
     @patch('api.feeds.get_database')

@@ -68,8 +68,8 @@ jobs:
       - name: Commit and push updated manifest
         if: steps.check.outputs.changed == 'true'
         run: |
-          git config user.name "minuspod-bot"
-          git config user.email "minuspod-bot@users.noreply.github.com"
+          git config user.name "sparkypod-bot"
+          git config user.email "sparkypod-bot@users.noreply.github.com"
           git add patterns/community/index.json
           git commit -m "chore: regenerate community pattern manifest [skip ci]"
           git push

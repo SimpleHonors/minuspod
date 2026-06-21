@@ -7,7 +7,7 @@
 # CVE-2025-3730 (torch 2.6.0 -> fixed in 2.8.0, MEDIUM)
 # ------------------------------------------------------
 # The vulnerability is a DoS triggered when torch.load() deserializes a
-# maliciously-crafted checkpoint or model file. MinusPod's torch usage is
+# maliciously-crafted checkpoint or model file. SparkyPod's torch usage is
 # limited to:
 #   - Loading Whisper models from HuggingFace (curated, trusted sources)
 #   - faster-whisper's internal transcription path
@@ -23,7 +23,7 @@
 # against the current torch ABI. Risk of breaking GPU transcription
 # outweighs the value of patching a non-exploitable MEDIUM here.
 #
-# Revisit if: CTranslate2 / faster-whisper are upgraded, or if MinusPod
+# Revisit if: CTranslate2 / faster-whisper are upgraded, or if SparkyPod
 # ever starts loading user-supplied torch artifacts.
 CVE-2025-3730
 
@@ -35,7 +35,7 @@ CVE-2025-3730
 # vulnerabilities; a container image cannot patch the running kernel, and
 # Ubuntu has published no fixed version (Trivy status "affected", FixedVersion
 # empty). None is in an application dependency and none was introduced by
-# MinusPod code -- they are freshly-disclosed 2026 kernel CVEs that entered
+# SparkyPod code -- they are freshly-disclosed 2026 kernel CVEs that entered
 # Trivy's database after 2.9.2 was scanned. The kernel that actually runs is
 # the host's, on the host's patch cadence, not this image's headers.
 #

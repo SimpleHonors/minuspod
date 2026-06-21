@@ -1,7 +1,7 @@
 [project]
-name = "minuspod-benchmark"
+name = "sparkypod-benchmark"
 version = "0.1.0"
-description = "Offline LLM ad-detection benchmark for MinusPod"
+description = "Offline LLM ad-detection benchmark for SparkyPod"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.39",

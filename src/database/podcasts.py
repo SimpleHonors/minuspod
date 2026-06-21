@@ -1,4 +1,4 @@
-"""Podcast CRUD mixin for MinusPod database."""
+"""Podcast CRUD mixin for SparkyPod database."""
 import json
 import logging
 from typing import Optional, Dict, List
