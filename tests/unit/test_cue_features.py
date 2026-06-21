@@ -1,4 +1,4 @@
-"""Unit tests for cue_features MFCC extractor (#350 v2)."""
+"""Unit tests for cue_features MFCC extractor (#350)."""
 import numpy as np
 
 from audio_analysis.cue_features import (
@@ -6,6 +6,8 @@ from audio_analysis.cue_features import (
     SAMPLE_RATE_HZ,
     compute_mfcc,
     deserialize_mfcc,
+    int16_bytes_to_pcm,
+    pcm_to_int16_bytes,
     serialize_mfcc,
 )
 
@@ -61,3 +63,13 @@ def test_deserialize_rejects_bad_size():
     blob = serialize_mfcc(rng.standard_normal((10, N_COEFFS)).astype(np.float32))
     with pytest.raises(ValueError):
         deserialize_mfcc(blob, N_COEFFS + 1)
+
+
+def test_pcm_int16_roundtrip_preserves_signal():
+    """Raw PCM source-of-truth survives the int16 round-trip within quantization."""
+    sig = _tone(1200.0, 0.4)
+    blob = pcm_to_int16_bytes(sig)
+    restored = int16_bytes_to_pcm(blob)
+    assert restored.shape == sig.shape
+    # int16 quantization error is bounded by one LSB (1/32768).
+    assert np.abs(sig - restored).max() < 1.0 / 32768.0 + 1e-6

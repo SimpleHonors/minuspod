@@ -1,4 +1,4 @@
-"""Snap detected ad edges to nearby audio cues (#350 v2).
+"""Snap detected ad edges to nearby audio cues (#350).
 
 Many shows play a short ding or stinger right before an ad break starts and
 another right when content resumes. When the cue detector flags one within a
@@ -17,6 +17,15 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
+from config import (
+    AUDIO_CUE_SNAP_CONFIDENCE,
+    AUDIO_CUE_ROLE_DEFAULT,
+    AUDIO_CUE_SOURCE_SPECTRAL,
+    AUDIO_CUE_START_EDGE_ROLES,
+    AUDIO_CUE_END_EDGE_ROLES,
+    is_template_cue,
+)
+
 logger = logging.getLogger('podcast.claude.cue_snap')
 
 
@@ -30,8 +39,34 @@ DEFAULT_SNAP_LAG_SECONDS = 2.0
 # Gap between the cue's end and the snapped ad start. Tiny lead so the cut
 # does not slice into the trailing decay of the ding.
 SNAP_GAP_SECONDS = 0.05
-# Minimum cue confidence to consider for snapping.
-MIN_CUE_CONFIDENCE_FOR_SNAP = 0.80
+# Minimum cue confidence to consider for snapping (default; DB-settable via
+# audio_cue_snap_confidence, which the caller threads in as min_confidence).
+MIN_CUE_CONFIDENCE_FOR_SNAP = AUDIO_CUE_SNAP_CONFIDENCE
+
+
+def _cue_role(cue) -> str:
+    """Matching role carried in a cue's details.
+
+    Template cues carry the role of their type ('start' / 'end' / 'boundary' /
+    'non_ad'); spectral fallback cues and any legacy signal default to
+    'boundary' so their existing both-edges behavior is preserved.
+    """
+    return (cue.details or {}).get('role', AUDIO_CUE_ROLE_DEFAULT)
+
+
+def _snap_record(original: float, proposed: float, cue) -> Dict:
+    """Build the per-edge snap audit record shared by the start and end edges."""
+    details = cue.details or {}
+    return {
+        'original': round(original, 3),
+        'cue_start': round(cue.start, 3),
+        'cue_end': round(cue.end, 3),
+        'cue_confidence': round(cue.confidence, 3),
+        'shift_seconds': round(proposed - original, 3),
+        'template_id': details.get('template_id'),
+        'label': details.get('label'),
+        'source': details.get('source', AUDIO_CUE_SOURCE_SPECTRAL),
+    }
 
 
 def snap_ad_boundaries_to_cues(
@@ -40,6 +75,7 @@ def snap_ad_boundaries_to_cues(
     max_boundary_shift_s: float,
     snap_lead_s: float = DEFAULT_SNAP_LEAD_SECONDS,
     snap_lag_s: float = DEFAULT_SNAP_LAG_SECONDS,
+    min_confidence: float = MIN_CUE_CONFIDENCE_FOR_SNAP,
 ) -> List[Dict]:
     """Return ``ads`` with each ``start`` and ``end`` snapped to a nearby cue.
 
@@ -60,7 +96,13 @@ def snap_ad_boundaries_to_cues(
     cues = audio_analysis_result.get_signals_by_type('audio_cue') if audio_analysis_result else []
     if not cues:
         return ads
-    cues = [c for c in cues if c.confidence >= MIN_CUE_CONFIDENCE_FOR_SNAP]
+    # Only template cues may move an ad edge. Spectral-fallback cues (no
+    # 'source' key) are too coarse to trust for boundary placement; they stay
+    # LLM-prompt evidence only, consistent with cue-pair synthesis.
+    cues = [
+        c for c in cues
+        if c.confidence >= min_confidence and is_template_cue(c.details)
+    ]
     if not cues:
         return ads
 
@@ -88,20 +130,11 @@ def snap_ad_boundaries_to_cues(
                 and shift >= 0.01
             ):
                 new_start = round(proposed_start, 3)
-                snap_record['start'] = {
-                    'original': round(original_start, 3),
-                    'cue_start': round(start_cue.start, 3),
-                    'cue_end': round(start_cue.end, 3),
-                    'cue_confidence': round(start_cue.confidence, 3),
-                    'shift_seconds': round(proposed_start - original_start, 3),
-                    'template_id': (start_cue.details or {}).get('template_id'),
-                    'label': (start_cue.details or {}).get('label'),
-                    'source': (start_cue.details or {}).get('source', 'spectral'),
-                }
+                snap_record['start'] = _snap_record(original_start, proposed_start, start_cue)
                 used_cue_ids.add(id(start_cue))
                 logger.info(
                     f"Cue snap (start): {original_start:.3f}s -> {new_start:.3f}s "
-                    f"(Δ={new_start - original_start:+.3f}s, "
+                    f"(delta={new_start - original_start:+.3f}s, "
                     f"cue={snap_record['start'].get('label') or 'spectral'}, "
                     f"conf={start_cue.confidence:.2f})"
                 )
@@ -124,19 +157,10 @@ def snap_ad_boundaries_to_cues(
                 and shift >= 0.01
             ):
                 new_end = round(proposed_end, 3)
-                snap_record['end'] = {
-                    'original': round(original_end, 3),
-                    'cue_start': round(end_cue.start, 3),
-                    'cue_end': round(end_cue.end, 3),
-                    'cue_confidence': round(end_cue.confidence, 3),
-                    'shift_seconds': round(proposed_end - original_end, 3),
-                    'template_id': (end_cue.details or {}).get('template_id'),
-                    'label': (end_cue.details or {}).get('label'),
-                    'source': (end_cue.details or {}).get('source', 'spectral'),
-                }
+                snap_record['end'] = _snap_record(original_end, proposed_end, end_cue)
                 logger.info(
                     f"Cue snap (end): {original_end:.3f}s -> {new_end:.3f}s "
-                    f"(Δ={new_end - original_end:+.3f}s, "
+                    f"(delta={new_end - original_end:+.3f}s, "
                     f"cue={snap_record['end'].get('label') or 'spectral'}, "
                     f"conf={end_cue.confidence:.2f})"
                 )
@@ -147,11 +171,6 @@ def snap_ad_boundaries_to_cues(
             ad['cue_snap'] = snap_record
 
     return ads
-
-
-# Backwards-compatible alias: existing callers and tests reference the
-# old name. The implementation now handles both edges.
-snap_ad_starts_to_cues = snap_ad_boundaries_to_cues
 
 
 def _pick_cue_for_start(
@@ -168,6 +187,8 @@ def _pick_cue_for_start(
     best = None
     best_key = None
     for cue in cues:
+        if _cue_role(cue) not in AUDIO_CUE_START_EDGE_ROLES:
+            continue
         cue_end = cue.end
         if cue_end < low or cue_end > high:
             continue
@@ -204,6 +225,8 @@ def _pick_cue_for_end(
     best_key = None
     for cue in cues:
         if id(cue) in exclude_ids:
+            continue
+        if _cue_role(cue) not in AUDIO_CUE_END_EDGE_ROLES:
             continue
         cue_start = cue.start
         if cue_start < low or cue_start > high:

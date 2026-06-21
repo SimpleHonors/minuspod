@@ -1,10 +1,10 @@
-"""Per-feed audio cue template matcher (#350 v2).
+"""Per-feed audio cue template matcher (#350).
 
 Each template is a short MFCC matrix the user marked on one episode. This
 detector decodes the full episode to MFCC once, then for every template runs a
 normalized cross-correlation against the episode-MFCC time axis. Each above-
 threshold peak becomes an ``audio_cue`` ``AudioSegmentSignal`` that rides the
-existing pipeline -- prompt injection in ``AudioEnforcer`` and start-edge snap
+existing pipeline -- prompt injection in ``AudioEnforcer`` and boundary snap
 in ``cue_boundary_snap``.
 
 Why MFCC NCC and not Chromaprint / spectrogram pixel match:
@@ -12,18 +12,20 @@ Why MFCC NCC and not Chromaprint / spectrogram pixel match:
   ad start edge to the millisecond-resolution we need for short stingers.
 - MFCC NCC is the canonical short-acoustic-event template match in the
   literature. ~1-2s wall time per template on a 1-hour episode at 16 kHz.
-- Cepstral mean normalization in ``cue_features`` cancels channel EQ
-  differences between the user's marked occurrence and other occurrences.
+- The zero-mean cross-correlation cancels the constant per-coefficient offset
+  between the user's marked occurrence and other occurrences of the same sound.
 """
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
+from scipy.signal import fftconvolve
 
+from config import AUDIO_CUE_TEMPLATE_SCORE, AUDIO_CUE_TYPE_DEFAULT, audio_cue_type_role
 from .base import AudioSegmentSignal, SignalType
 from .cue_features import (
     FRAME_HOP_MS,
@@ -37,14 +39,9 @@ from utils.audio import get_audio_duration
 logger = logging.getLogger('podcast.audio_analysis.cue_template')
 
 
-# Default threshold; tuneable via DB setting `audio_cue_template_score`.
-# 0.75 is a balance: MFCC NCC with cepstral-mean-normalised templates
-# routinely lands 0.85-0.95 on a re-encoded copy of the same sound, but the
-# combined effect of the source vs. target codecs (the marked episode and
-# the target episode rarely share an encoder), small frame-alignment slop,
-# and any background bed under the cue can pull a real match below 0.85.
-# False positives stay rare at 0.75 because most non-cue audio sits near 0.0.
-DEFAULT_MATCH_SCORE = 0.75
+# Default threshold; tuneable via DB setting `audio_cue_template_score`. The
+# value and its rationale live in config.AUDIO_CUE_TEMPLATE_SCORE.
+DEFAULT_MATCH_SCORE = AUDIO_CUE_TEMPLATE_SCORE
 # Max matches we report per template per episode -- bounds prompt size.
 MAX_MATCHES_PER_TEMPLATE = 50
 # Episode is decoded in chunks of this many seconds with `OVERLAP_S` overlap
@@ -61,6 +58,8 @@ class _Template:
     mfcc: np.ndarray             # (n_frames, n_coeffs) float32
     duration_s: float
     n_coeffs: int
+    cue_type: str
+    role: str
 
 
 class AudioCueTemplateMatcher:
@@ -89,12 +88,15 @@ class AudioCueTemplateMatcher:
                     f"{mfcc.shape[0]} frames"
                 )
                 continue
+            cue_type = row.get('cue_type') or AUDIO_CUE_TYPE_DEFAULT
             self._templates.append(_Template(
                 template_id=int(row['id']),
                 label=row.get('label') or f"template-{row['id']}",
                 mfcc=mfcc,
                 duration_s=float(row['duration_s']),
                 n_coeffs=int(row['n_coeffs']),
+                cue_type=cue_type,
+                role=audio_cue_type_role(cue_type),
             ))
 
     @property
@@ -179,17 +181,22 @@ class AudioCueTemplateMatcher:
             signals.extend(kept)
 
         elapsed = time.time() - start_wall
+        # Count matches per template in one pass, reused for both the tuning
+        # log and the debug payload.
+        match_counts: Dict[int, int] = {t.template_id: 0 for t in self._templates}
+        for s in signals:
+            tid = (s.details or {}).get('template_id')
+            if tid in match_counts:
+                match_counts[tid] += 1
         # Per-template tuning telemetry: even zero-match templates report
         # their best correlation against this episode so the user can see
         # whether to lower the threshold or remark the cue.
         for tpl in self._templates:
-            tpl_signals = [s for s in signals
-                           if (s.details or {}).get('template_id') == tpl.template_id]
             peak = per_template_peak_score.get(tpl.template_id, 0.0)
             logger.info(
                 f"Cue template {tpl.template_id} ({tpl.label!r}): "
                 f"peak score {peak:.3f} vs threshold {self.score_threshold:.3f}, "
-                f"{len(tpl_signals)} match(es)"
+                f"{match_counts[tpl.template_id]} match(es)"
             )
         logger.info(
             f"Cue template match: {len(self._templates)} template(s), "
@@ -204,10 +211,7 @@ class AudioCueTemplateMatcher:
                     'label': tpl.label,
                     'duration_s': tpl.duration_s,
                     'peak_score': round(per_template_peak_score.get(tpl.template_id, 0.0), 3),
-                    'match_count': sum(
-                        1 for s in signals
-                        if (s.details or {}).get('template_id') == tpl.template_id
-                    ),
+                    'match_count': match_counts[tpl.template_id],
                 }
                 for tpl in self._templates
             ],
@@ -231,7 +235,7 @@ class AudioCueTemplateMatcher:
                 continue
             if chunk_mfcc.shape[0] < tpl.mfcc.shape[0]:
                 continue
-            scores = _sliding_cosine(chunk_mfcc, tpl.mfcc)
+            scores = _sliding_zncc(chunk_mfcc, tpl.mfcc)
             if not scores.size:
                 continue
             chunk_peak = float(scores.max())
@@ -254,6 +258,8 @@ class AudioCueTemplateMatcher:
                         'source': 'template',
                         'template_id': tpl.template_id,
                         'label': tpl.label,
+                        'cue_type': tpl.cue_type,
+                        'role': tpl.role,
                         'score': round(score, 3),
                     },
                 ))
@@ -275,7 +281,7 @@ class AudioCueTemplateMatcher:
         return kept
 
 
-def _sliding_cosine(haystack: np.ndarray, needle: np.ndarray) -> np.ndarray:
+def _sliding_zncc(haystack: np.ndarray, needle: np.ndarray) -> np.ndarray:
     """Sliding zero-mean normalized cross-correlation (ZNCC).
 
     Both inputs are float32 ``(n_frames, n_coeffs)``. Returns a 1D array of
@@ -328,7 +334,6 @@ def _sliding_cosine(haystack: np.ndarray, needle: np.ndarray) -> np.ndarray:
     # The (- window_mean[c]) term drops out because needle_zm sums to zero per
     # column, so we just correlate the raw haystack column with the zero-mean
     # needle column.
-    from scipy.signal import fftconvolve
     numerator = np.zeros(n_out, dtype=np.float64)
     for c in range(n_coeffs):
         corr = fftconvolve(hay_f64[:, c], needle_zm[::-1, c], mode='valid')

@@ -20,7 +20,7 @@ function AudioSection({
 }: AudioSectionProps) {
   return (
     <CollapsibleSection title="Audio">
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div>
           <label htmlFor="audioBitrate" className="block text-sm font-medium text-foreground mb-2">
             Output Bitrate
@@ -70,8 +70,8 @@ function AudioSection({
               className="w-full px-4 py-2 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
             >
               <option value="gentle">Gentle - Light leveling, preserves dynamics</option>
-              <option value="normal">Normal - Balanced leveling</option>
-              <option value="aggressive">Aggressive - Strong leveling (recommended)</option>
+              <option value="normal">Normal - Balanced leveling (recommended)</option>
+              <option value="aggressive">Aggressive - Strong leveling</option>
               <option value="extreme">Extreme - Heavy compression, very even level</option>
               <option value="maximum">Maximum - Flattest possible (may add slight pumping)</option>
             </select>

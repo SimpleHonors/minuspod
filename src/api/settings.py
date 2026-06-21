@@ -1,6 +1,7 @@
 """Settings routes: /settings/* endpoints."""
 import json
 import logging
+import math
 import os
 import threading
 import uuid
@@ -29,6 +30,7 @@ from config import (
     coerce_bool_setting,
     STAGE_TUNABLE_PAYLOAD_KEYS,
 )
+from audio_processor import NORMALIZE_PRESETS
 from pricing_fetcher import force_refresh_pricing
 from llm_client import (
     get_effective_provider, get_effective_base_url, get_api_key, get_effective_openrouter_api_key,
@@ -114,6 +116,11 @@ def get_settings():
     from config import (
         AUDIO_CUE_FREQ_MIN_HZ, AUDIO_CUE_FREQ_MAX_HZ,
         AUDIO_CUE_PROMINENCE_DB, AUDIO_CUE_MIN_CONFIDENCE,
+        AUDIO_CUE_TEMPLATE_SCORE, AUDIO_CUE_SNAP_CONFIDENCE,
+        AUDIO_CUE_CAPTURE_MIN_SECONDS, AUDIO_CUE_CAPTURE_MAX_SECONDS,
+        AUDIO_CUE_CAPTURE_MAX_INTRO_SECONDS, AUDIO_CUE_CAPTURE_MAX_OUTRO_SECONDS,
+        AUDIO_CUE_PAIR_CONFIDENCE, AUDIO_CUE_PAIR_MIN_BREAK_SECONDS,
+        AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
     )
     from chapters_generator import CHAPTERS_MODEL
     settings = _settings_view(db.get_all_settings())
@@ -151,12 +158,6 @@ def get_settings():
         max_feed_episodes = int(_setting_value(settings, 'max_feed_episodes', '300'))
     except (ValueError, TypeError):
         max_feed_episodes = 300
-
-    try:
-        combined_feed_episode_limit = int(
-            _setting_value(settings, 'combined_feed_episode_limit', '50'))
-    except (ValueError, TypeError):
-        combined_feed_episode_limit = 50
 
     # Get min cut confidence (ad detection aggressiveness)
     try:
@@ -210,21 +211,10 @@ def get_settings():
     vad_gap_mid = _db_float('vad_gap_mid_min_seconds', default_vad_gap_mid)
     vad_gap_tail = _db_float('vad_gap_tail_min_seconds', default_vad_gap_tail)
 
-    def _db_int(key, default):
-        try:
-            return int(_setting_value(settings, key, default))
-        except (ValueError, TypeError):
-            return default
-
-    transcribe_max_chunk_seconds = _db_int('transcribe_max_chunk_seconds', 600)
-    transcribe_concurrent_chunks = _db_int('transcribe_concurrent_chunks', 4)
-    transcribe_chunk_overlap_seconds = _db_int('transcribe_chunk_overlap_seconds', 30)
-
+    audio_bitrate = _setting_value(settings, 'audio_bitrate', DEFAULT_AUDIO_BITRATE)
     audio_normalize_enabled_raw = _setting_value(settings, 'audio_normalize_enabled', 'false')
     audio_normalize_enabled = str(audio_normalize_enabled_raw).lower() in ('true', '1', 'yes')
-    audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'aggressive')
-
-    audio_bitrate = _setting_value(settings, 'audio_bitrate', DEFAULT_AUDIO_BITRATE)
+    audio_normalize_intensity = _setting_value(settings, 'audio_normalize_intensity', 'normal')
     default_skip_flac = os.environ.get('SKIP_FLAC_COMPRESSION', 'false')
     skip_flac_raw = _setting_value(settings, 'skip_flac_compression', default_skip_flac)
     skip_flac = coerce_bool_setting(skip_flac_raw)
@@ -254,6 +244,16 @@ def get_settings():
         AD_REVIEWER_PARALLEL_ADS_MIN,
         min(AD_REVIEWER_PARALLEL_ADS_MAX, reviewer_parallel),
     )
+
+    def _db_int(key, default):
+        try:
+            return int(_setting_value(settings, key, default))
+        except (ValueError, TypeError):
+            return default
+
+    transcribe_max_chunk_seconds = _db_int('transcribe_max_chunk_seconds', 600)
+    transcribe_concurrent_chunks = _db_int('transcribe_concurrent_chunks', 4)
+    transcribe_chunk_overlap_seconds = _db_int('transcribe_chunk_overlap_seconds', 30)
 
     # Per-stage LLM tunables: resolved value (env > DB > default) and env-override status.
     from config import (
@@ -313,8 +313,8 @@ def get_settings():
     # Audio cue detection experiment (#350)
     audio_cue_enabled = str(
         _setting_value(settings, 'audio_cue_detection_enabled', 'false')).strip().lower() == 'true'
-    audio_cue_create_from_pairs = str(
-        _setting_value(settings, 'audio_cue_create_from_pairs', 'false')).strip().lower() == 'true'
+    audio_cue_create_from_pairs = coerce_bool_setting(
+        _setting_value(settings, 'audio_cue_create_from_pairs', 'false'))
 
     # Learned positional prior experiment (#360)
     positional_prior_enabled = coerce_bool_setting(
@@ -330,6 +330,15 @@ def get_settings():
     audio_cue_freq_max = int(_cue_num('audio_cue_freq_max_hz', AUDIO_CUE_FREQ_MAX_HZ))
     audio_cue_prominence = _cue_num('audio_cue_prominence_db', AUDIO_CUE_PROMINENCE_DB)
     audio_cue_min_conf = _cue_num('audio_cue_min_confidence', AUDIO_CUE_MIN_CONFIDENCE)
+    audio_cue_template_score = _cue_num('audio_cue_template_score', AUDIO_CUE_TEMPLATE_SCORE)
+    audio_cue_snap_conf = _cue_num('audio_cue_snap_confidence', AUDIO_CUE_SNAP_CONFIDENCE)
+    audio_cue_capture_min = _cue_num('audio_cue_capture_min_seconds', AUDIO_CUE_CAPTURE_MIN_SECONDS)
+    audio_cue_capture_max = _cue_num('audio_cue_capture_max_seconds', AUDIO_CUE_CAPTURE_MAX_SECONDS)
+    audio_cue_capture_max_intro = _cue_num('audio_cue_capture_max_intro_seconds', AUDIO_CUE_CAPTURE_MAX_INTRO_SECONDS)
+    audio_cue_capture_max_outro = _cue_num('audio_cue_capture_max_outro_seconds', AUDIO_CUE_CAPTURE_MAX_OUTRO_SECONDS)
+    audio_cue_pair_conf = _cue_num('audio_cue_pair_confidence', AUDIO_CUE_PAIR_CONFIDENCE)
+    audio_cue_pair_min_break = _cue_num('audio_cue_pair_min_break_seconds', AUDIO_CUE_PAIR_MIN_BREAK_SECONDS)
+    audio_cue_pair_max_break = _cue_num('audio_cue_pair_max_break_seconds', AUDIO_CUE_PAIR_MAX_BREAK_SECONDS)
 
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT),
@@ -344,7 +353,6 @@ def get_settings():
         'whisperModel': _sv('whisper_model', whisper_model),
         'autoProcessEnabled': _sv('auto_process_enabled', auto_process_enabled),
         'maxFeedEpisodes': _sv('max_feed_episodes', max_feed_episodes),
-        'combinedFeedEpisodeLimit': _sv('combined_feed_episode_limit', combined_feed_episode_limit),
         'onlyExposeProcessedDefault': _sv(
             'only_expose_processed_default', only_expose_processed_default),
         'vttTranscriptsEnabled': _sv('vtt_transcripts_enabled', vtt_enabled),
@@ -366,22 +374,31 @@ def get_settings():
         'vadGapStartMinSeconds': _sv('vad_gap_start_min_seconds', vad_gap_start),
         'vadGapMidMinSeconds': _sv('vad_gap_mid_min_seconds', vad_gap_mid),
         'vadGapTailMinSeconds': _sv('vad_gap_tail_min_seconds', vad_gap_tail),
-        'transcribeMaxChunkSeconds': _sv('transcribe_max_chunk_seconds', transcribe_max_chunk_seconds),
-        'transcribeConcurrentChunks': _sv('transcribe_concurrent_chunks', transcribe_concurrent_chunks),
-        'transcribeChunkOverlapSeconds': _sv('transcribe_chunk_overlap_seconds', transcribe_chunk_overlap_seconds),
-        'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
-        'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
         'audioCueDetectionEnabled': _sv('audio_cue_detection_enabled', audio_cue_enabled),
         'audioCueFreqMinHz': _sv('audio_cue_freq_min_hz', audio_cue_freq_min),
         'audioCueFreqMaxHz': _sv('audio_cue_freq_max_hz', audio_cue_freq_max),
         'audioCueProminenceDb': _sv('audio_cue_prominence_db', audio_cue_prominence),
         'audioCueMinConfidence': _sv('audio_cue_min_confidence', audio_cue_min_conf),
         'audioCueCreateFromPairs': _sv('audio_cue_create_from_pairs', audio_cue_create_from_pairs),
+        'audioCueTemplateScore': _sv('audio_cue_template_score', audio_cue_template_score),
+        'audioCueSnapConfidence': _sv('audio_cue_snap_confidence', audio_cue_snap_conf),
+        'audioCueCaptureMinSeconds': _sv('audio_cue_capture_min_seconds', audio_cue_capture_min),
+        'audioCueCaptureMaxSeconds': _sv('audio_cue_capture_max_seconds', audio_cue_capture_max),
+        'audioCueCaptureMaxIntroSeconds': _sv('audio_cue_capture_max_intro_seconds', audio_cue_capture_max_intro),
+        'audioCueCaptureMaxOutroSeconds': _sv('audio_cue_capture_max_outro_seconds', audio_cue_capture_max_outro),
+        'audioCuePairConfidence': _sv('audio_cue_pair_confidence', audio_cue_pair_conf),
+        'audioCuePairMinBreakSeconds': _sv('audio_cue_pair_min_break_seconds', audio_cue_pair_min_break),
+        'audioCuePairMaxBreakSeconds': _sv('audio_cue_pair_max_break_seconds', audio_cue_pair_max_break),
         'positionalPriorEnabled': _sv('positional_prior_enabled', positional_prior_enabled),
         'audioBitrate': _sv('audio_bitrate', audio_bitrate),
+        'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
+        'audioNormalizeIntensity': _sv('audio_normalize_intensity', audio_normalize_intensity),
         'skipFlacCompression': _sv('skip_flac_compression', skip_flac),
         'adDetectionParallelWindows': _sv('ad_detection_parallel_windows', parallel_windows),
         'adReviewerParallelAds': _sv('ad_reviewer_parallel_ads', reviewer_parallel),
+        'transcribeMaxChunkSeconds': _sv('transcribe_max_chunk_seconds', transcribe_max_chunk_seconds),
+        'transcribeConcurrentChunks': _sv('transcribe_concurrent_chunks', transcribe_concurrent_chunks),
+        'transcribeChunkOverlapSeconds': _sv('transcribe_chunk_overlap_seconds', transcribe_chunk_overlap_seconds),
         'apiKeyConfigured': api_key_configured,
         'retentionDays': int(db.get_setting('retention_days') or '30'),
         'stageTunables': tunables_payload,
@@ -402,7 +419,6 @@ def get_settings():
             'whisperModel': default_whisper_model,
             'autoProcessEnabled': True,
             'maxFeedEpisodes': 300,
-            'combinedFeedEpisodeLimit': 50,
             'onlyExposeProcessedDefault': False,
             'vttTranscriptsEnabled': True,
             'chaptersEnabled': True,
@@ -420,11 +436,6 @@ def get_settings():
             'vadGapStartMinSeconds': default_vad_gap_start,
             'vadGapMidMinSeconds': default_vad_gap_mid,
             'vadGapTailMinSeconds': default_vad_gap_tail,
-            'transcribeMaxChunkSeconds': 600,
-            'transcribeConcurrentChunks': 4,
-            'transcribeChunkOverlapSeconds': 30,
-            'audioNormalizeEnabled': False,
-            'audioNormalizeIntensity': 'aggressive',
             'audioCueDetectionEnabled': False,
             'positionalPriorEnabled': False,
             'audioCueFreqMinHz': int(AUDIO_CUE_FREQ_MIN_HZ),
@@ -432,10 +443,24 @@ def get_settings():
             'audioCueProminenceDb': AUDIO_CUE_PROMINENCE_DB,
             'audioCueMinConfidence': AUDIO_CUE_MIN_CONFIDENCE,
             'audioCueCreateFromPairs': False,
+            'audioCueTemplateScore': AUDIO_CUE_TEMPLATE_SCORE,
+            'audioCueSnapConfidence': AUDIO_CUE_SNAP_CONFIDENCE,
+            'audioCueCaptureMinSeconds': AUDIO_CUE_CAPTURE_MIN_SECONDS,
+            'audioCueCaptureMaxSeconds': AUDIO_CUE_CAPTURE_MAX_SECONDS,
+            'audioCueCaptureMaxIntroSeconds': AUDIO_CUE_CAPTURE_MAX_INTRO_SECONDS,
+            'audioCueCaptureMaxOutroSeconds': AUDIO_CUE_CAPTURE_MAX_OUTRO_SECONDS,
+            'audioCuePairConfidence': AUDIO_CUE_PAIR_CONFIDENCE,
+            'audioCuePairMinBreakSeconds': AUDIO_CUE_PAIR_MIN_BREAK_SECONDS,
+            'audioCuePairMaxBreakSeconds': AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
             'audioBitrate': DEFAULT_AUDIO_BITRATE,
+            'audioNormalizeEnabled': False,
+            'audioNormalizeIntensity': 'normal',
             'skipFlacCompression': coerce_bool_setting(os.environ.get('SKIP_FLAC_COMPRESSION', 'false')),
             'adDetectionParallelWindows': AD_DETECTION_PARALLEL_WINDOWS_DEFAULT,
             'adReviewerParallelAds': AD_REVIEWER_PARALLEL_ADS_DEFAULT,
+            'transcribeMaxChunkSeconds': 600,
+            'transcribeConcurrentChunks': 4,
+            'transcribeChunkOverlapSeconds': 30,
         }
     })
 
@@ -455,29 +480,6 @@ def update_ad_detection_settings():
     if not data:
         return error_response('Request body required', 400)
 
-    logger.info(f"PUT /settings/ad-detection payload keys ({len(data)}): {sorted(data.keys())}")
-
-    # Defense in depth: reject payloads that match the known "stale frontend
-    # bundle" wipe signature -- a buggy older Settings.tsx sent every field on
-    # every Save, with the buggy initial useState defaults overwriting working
-    # values. The diff-payload fix prevents this client-side, but a stale
-    # browser tab can still serve the old bundle. Catch it here.
-    _wipe_sigs = (
-        {'whisperBackend': 'local', 'whisperApiBaseUrl': '', 'whisperApiModel': 'whisper-1'},
-        {'llmProvider': 'anthropic', 'openaiBaseUrl': 'http://localhost:8000/v1', 'claudeModel': ''},
-    )
-    for sig in _wipe_sigs:
-        if all(k in data and data[k] == v for k, v in sig.items()):
-            logger.warning(
-                f"Rejected suspected stale-bundle wipe payload (matched signature {sig}); "
-                f"all keys={sorted(data.keys())}"
-            )
-            return error_response(
-                'Save rejected: payload matches a known buggy pattern from a stale '
-                'browser bundle. Hard-refresh the page (Ctrl+Shift+R) and retry.',
-                409,
-            )
-
     db = get_database()
 
     phases = (
@@ -486,15 +488,14 @@ def update_ad_detection_settings():
         _apply_model_fields,
         _apply_processing_flags,
         _apply_min_cut_confidence,
-        _apply_audio_normalize_fields,
         _apply_audio_fields,
         _apply_provider_fields,
         _apply_whisper_fields,
         _apply_vad_gap_fields,
-        _apply_transcribe_chunk_fields,
         _apply_audio_cue_fields,
         _apply_positional_prior_fields,
         _apply_podcast_index_fields,
+        _apply_transcribe_chunk_fields,
         _apply_stage_tunables,
     )
     for phase in phases:
@@ -592,16 +593,6 @@ def _apply_processing_flags(db, data):
         db.set_setting('max_feed_episodes', str(max_ep), is_default=False)
         logger.info(f"Updated max feed episodes to: {max_ep}")
 
-    if 'combinedFeedEpisodeLimit' in data:
-        try:
-            combined_limit = int(data['combinedFeedEpisodeLimit'])
-        except (TypeError, ValueError):
-            return error_response('combinedFeedEpisodeLimit must be an integer', 400)
-        if combined_limit < 1 or combined_limit > 500:
-            return error_response('combinedFeedEpisodeLimit must be between 1 and 500', 400)
-        db.set_setting('combined_feed_episode_limit', str(combined_limit), is_default=False)
-        logger.info(f"Updated combined feed episode limit to: {combined_limit}")
-
     if 'onlyExposeProcessedDefault' in data:
         value = 'true' if data['onlyExposeProcessedDefault'] else 'false'
         db.set_setting('only_expose_processed_default', value, is_default=False)
@@ -629,25 +620,6 @@ def _apply_min_cut_confidence(db, data):
     return None
 
 
-def _apply_audio_normalize_fields(db, data):
-    """Audio loudness normalization (dynaudnorm second pass)."""
-    if 'audioNormalizeEnabled' in data:
-        value = 'true' if data['audioNormalizeEnabled'] else 'false'
-        db.set_setting('audio_normalize_enabled', value, is_default=False)
-        logger.info(f"Updated audio normalize enabled to: {value}")
-
-    if 'audioNormalizeIntensity' in data:
-        valid_intensities = ('gentle', 'normal', 'aggressive', 'extreme', 'maximum')
-        if data['audioNormalizeIntensity'] not in valid_intensities:
-            return json_response(
-                {'error': f'audioNormalizeIntensity must be one of: {", ".join(valid_intensities)}'},
-                400,
-            )
-        db.set_setting('audio_normalize_intensity', data['audioNormalizeIntensity'], is_default=False)
-        logger.info(f"Updated audio normalize intensity to: {data['audioNormalizeIntensity']}")
-    return None
-
-
 def _apply_audio_fields(db, data):
     """Persist the audio output bitrate, restricted to the allowed encode set."""
     if 'audioBitrate' in data:
@@ -658,6 +630,23 @@ def _apply_audio_fields(db, data):
             )
         db.set_setting('audio_bitrate', val, is_default=False)
         logger.info(f"Updated audio bitrate to: {val}")
+
+    if 'audioNormalizeEnabled' in data:
+        value = 'true' if data['audioNormalizeEnabled'] else 'false'
+        db.set_setting('audio_normalize_enabled', value, is_default=False)
+        logger.info(f"Updated audio normalize enabled to: {value}")
+
+    if 'audioNormalizeIntensity' in data:
+        # Derive the allowed set from the presets themselves so the validator
+        # can never drift from what AudioProcessor actually supports.
+        valid_intensities = set(NORMALIZE_PRESETS.keys())
+        if data['audioNormalizeIntensity'] not in valid_intensities:
+            return json_response(
+                {'error': f'audioNormalizeIntensity must be one of: {", ".join(sorted(valid_intensities))}'},
+                400,
+            )
+        db.set_setting('audio_normalize_intensity', data['audioNormalizeIntensity'], is_default=False)
+        logger.info(f"Updated audio normalize intensity to: {data['audioNormalizeIntensity']}")
 
     if 'adDetectionParallelWindows' in data:
         try:
@@ -700,6 +689,54 @@ def _apply_audio_fields(db, data):
             )
         db.set_setting('ad_reviewer_parallel_ads', str(n), is_default=False)
         logger.info(f"Updated ad_reviewer_parallel_ads to: {n}")
+    return None
+
+
+def _apply_transcribe_chunk_fields(db, data):
+    """Chunked transcription tuning (parallel API path)."""
+    parsed = {}
+    for field_name, db_key, max_val in (
+        ('transcribeMaxChunkSeconds', 'transcribe_max_chunk_seconds', 7200),
+        ('transcribeConcurrentChunks', 'transcribe_concurrent_chunks', 32),
+        ('transcribeChunkOverlapSeconds', 'transcribe_chunk_overlap_seconds', 600),
+    ):
+        if field_name not in data:
+            continue
+        try:
+            value = int(data[field_name])
+        except (TypeError, ValueError):
+            return json_response({'error': f'{field_name} must be a positive integer'}, 400)
+        if value < 1 or value > max_val:
+            return json_response(
+                {'error': f'{field_name} must be between 1 and {max_val}'}, 400
+            )
+        parsed[db_key] = value
+
+    if not parsed:
+        return None
+
+    # Cross-field: overlap must stay below the chunk size. An overlap >= chunk
+    # makes every chunk span its whole neighbor, wasting work and degenerating
+    # the merge dedupe. Validate the effective values (incoming where present,
+    # stored otherwise) so changing one field can't cross the other.
+    def _effective(db_key, fallback):
+        if db_key in parsed:
+            return parsed[db_key]
+        stored = db.get_setting(db_key)
+        try:
+            return int(stored) if stored else fallback
+        except (ValueError, TypeError):
+            return fallback
+
+    if _effective('transcribe_chunk_overlap_seconds', 30) >= _effective('transcribe_max_chunk_seconds', 600):
+        return json_response(
+            {'error': 'transcribeChunkOverlapSeconds must be less than transcribeMaxChunkSeconds'},
+            400,
+        )
+
+    for db_key, value in parsed.items():
+        db.set_setting(db_key, str(value), is_default=False)
+        logger.info(f"Updated {db_key} to: {value}")
     return None
 
 
@@ -888,28 +925,6 @@ def _apply_vad_gap_fields(db, data):
     return None
 
 
-def _apply_transcribe_chunk_fields(db, data):
-    """Chunked transcription tuning (parallel API path)."""
-    for field_name, db_key, max_val in (
-        ('transcribeMaxChunkSeconds', 'transcribe_max_chunk_seconds', 7200),
-        ('transcribeConcurrentChunks', 'transcribe_concurrent_chunks', 32),
-        ('transcribeChunkOverlapSeconds', 'transcribe_chunk_overlap_seconds', 600),
-    ):
-        if field_name not in data:
-            continue
-        try:
-            value = int(data[field_name])
-        except (TypeError, ValueError):
-            return json_response({'error': f'{field_name} must be a positive integer'}, 400)
-        if value < 1 or value > max_val:
-            return json_response(
-                {'error': f'{field_name} must be between 1 and {max_val}'}, 400
-            )
-        db.set_setting(db_key, str(value), is_default=False)
-        logger.info(f"Updated {db_key} to: {value}")
-    return None
-
-
 def _apply_audio_cue_fields(db, data):
     """Persist the audio-cue detection experiment (#350): toggle + tuneables.
 
@@ -936,6 +951,15 @@ def _apply_audio_cue_fields(db, data):
         ('audioCueFreqMaxHz', 'audio_cue_freq_max_hz', 20.0, 20000.0),
         ('audioCueProminenceDb', 'audio_cue_prominence_db', 1.0, 40.0),
         ('audioCueMinConfidence', 'audio_cue_min_confidence', 0.0, 1.0),
+        ('audioCueTemplateScore', 'audio_cue_template_score', 0.0, 0.99),
+        ('audioCueSnapConfidence', 'audio_cue_snap_confidence', 0.0, 1.0),
+        ('audioCueCaptureMinSeconds', 'audio_cue_capture_min_seconds', 0.05, 10.0),
+        ('audioCueCaptureMaxSeconds', 'audio_cue_capture_max_seconds', 0.05, 30.0),
+        ('audioCueCaptureMaxIntroSeconds', 'audio_cue_capture_max_intro_seconds', 0.05, 120.0),
+        ('audioCueCaptureMaxOutroSeconds', 'audio_cue_capture_max_outro_seconds', 0.05, 120.0),
+        ('audioCuePairConfidence', 'audio_cue_pair_confidence', 0.0, 1.0),
+        ('audioCuePairMinBreakSeconds', 'audio_cue_pair_min_break_seconds', 1.0, 600.0),
+        ('audioCuePairMaxBreakSeconds', 'audio_cue_pair_max_break_seconds', 1.0, 3600.0),
     ):
         if field_name not in data:
             continue
@@ -943,7 +967,9 @@ def _apply_audio_cue_fields(db, data):
             value = float(data[field_name])
         except (TypeError, ValueError):
             return json_response({'error': f'{field_name} must be a number'}, 400)
-        if value < lo or value > hi:
+        # JSON parsing accepts NaN/Infinity; NaN slips past the range check below
+        # (nan < lo and nan > hi are both False), so reject non-finite explicitly.
+        if not math.isfinite(value) or value < lo or value > hi:
             return json_response({'error': f'{field_name} must be between {lo} and {hi}'}, 400)
         parsed[field_name] = value
         writes.append((db_key, str(value)))
@@ -1129,6 +1155,11 @@ def reset_ad_detection_settings():
     db.reset_setting('min_cut_confidence')
     db.reset_setting('auto_process_enabled')
     db.reset_setting('audio_bitrate')
+    db.reset_setting('audio_normalize_enabled')
+    db.reset_setting('audio_normalize_intensity')
+    db.reset_setting('transcribe_max_chunk_seconds')
+    db.reset_setting('transcribe_concurrent_chunks')
+    db.reset_setting('transcribe_chunk_overlap_seconds')
     db.reset_setting('ad_detection_parallel_windows')
     db.reset_setting('ad_reviewer_parallel_ads')
 
@@ -1149,14 +1180,23 @@ def reset_ad_detection_settings():
     db.reset_setting('vad_gap_start_min_seconds')
     db.reset_setting('vad_gap_mid_min_seconds')
     db.reset_setting('vad_gap_tail_min_seconds')
-    db.reset_setting('audio_normalize_enabled')
-    db.reset_setting('audio_normalize_intensity')
 
-    # Per-stage LLM tunables (temperature, max tokens, reasoning, Ollama context
-    # window, detection-window geometry). reset_setting clears each row so
-    # env > default resolution applies.
-    for _payload_key, db_key, _kind in STAGE_TUNABLE_PAYLOAD_KEYS:
-        db.reset_setting(db_key)
+    # Audio cue detection family (#350)
+    db.reset_setting('audio_cue_detection_enabled')
+    db.reset_setting('audio_cue_freq_min_hz')
+    db.reset_setting('audio_cue_freq_max_hz')
+    db.reset_setting('audio_cue_prominence_db')
+    db.reset_setting('audio_cue_min_confidence')
+    db.reset_setting('audio_cue_template_score')
+    db.reset_setting('audio_cue_create_from_pairs')
+    db.reset_setting('audio_cue_snap_confidence')
+    db.reset_setting('audio_cue_capture_min_seconds')
+    db.reset_setting('audio_cue_capture_max_seconds')
+    db.reset_setting('audio_cue_capture_max_intro_seconds')
+    db.reset_setting('audio_cue_capture_max_outro_seconds')
+    db.reset_setting('audio_cue_pair_confidence')
+    db.reset_setting('audio_cue_pair_min_break_seconds')
+    db.reset_setting('audio_cue_pair_max_break_seconds')
 
     # Per-stage LLM tunables (temperature, max tokens, reasoning, Ollama context
     # window, detection-window geometry). reset_setting clears each row so
@@ -1328,16 +1368,27 @@ def get_whisper_models():
 @api.route('/networks', methods=['GET'])
 @log_request
 def list_networks():
-    """List all known podcast networks for network override selection."""
+    """List known podcast networks plus operator-created custom networks.
+
+    Custom networks are distinct free-text network_id_override values set on any
+    feed; surfacing them lets a network created on one feed be selected from the
+    dropdown on every other feed. For a custom network the id and the display
+    name are the same string. Known networks win id collisions.
+    """
     from pattern_service import KNOWN_NETWORKS
 
-    networks = [
-        {'id': network_id, 'name': network_id.replace('_', ' ').title()}
+    networks = {
+        network_id: {'id': network_id, 'name': network_id.replace('_', ' ').title()}
         for network_id in KNOWN_NETWORKS.keys()
-    ]
+    }
+
+    db = get_database()
+    for override in db.get_custom_network_overrides():
+        if override not in networks:
+            networks[override] = {'id': override, 'name': override}
 
     return json_response({
-        'networks': sorted(networks, key=lambda x: x['name'])
+        'networks': sorted(networks.values(), key=lambda x: x['name'])
     })
 
 

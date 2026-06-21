@@ -352,6 +352,18 @@ def _get_chunk_settings() -> Dict[str, int]:
                     logger.warning(f"Invalid {setting_key}={val!r}, using default")
     except Exception as e:
         logger.warning(f"Could not read chunk settings from DB, using defaults: {e}")
+
+    # Clamp to the same bounds the API validator enforces. Values set via env
+    # var or a direct DB write skip that validator, so guard at the point of
+    # use: an unbounded concurrency would thread-bomb the API, and an overlap
+    # >= chunk size makes merge_overlapping_segments over-dedupe and drop real
+    # transcript content.
+    defaults['max_chunk_seconds'] = min(7200, defaults['max_chunk_seconds'])
+    defaults['concurrent_chunks'] = min(32, defaults['concurrent_chunks'])
+    defaults['chunk_overlap_seconds'] = min(
+        defaults['chunk_overlap_seconds'],
+        max(1, defaults['max_chunk_seconds'] - 1),
+    )
     return defaults
 
 
@@ -746,15 +758,8 @@ class Transcriber:
                             pass
                     flac_path = None
 
-            # Build request. Allow base_url to be configured either with or
-            # without a trailing /v1 segment: vLLM (and OpenAI itself) only
-            # serve /v1/audio/transcriptions, while existing deployments
-            # commonly set whisper_api_base_url to bare host:port. Auto-append
-            # /v1 when missing so both conventions work.
-            _base = base_url.rstrip('/')
-            if not _base.endswith('/v1'):
-                _base = f"{_base}/v1"
-            url = f"{_base}/audio/transcriptions"
+            # Build request
+            url = f"{base_url.rstrip('/')}/audio/transcriptions"
             initial_prompt = self.get_initial_prompt(podcast_name)
 
             headers = {}
@@ -850,16 +855,6 @@ class Transcriber:
                 break
 
             if response is None or response.status_code != 200:
-                if response is not None:
-                    logger.error(
-                        "Whisper API failed: status=%s body=%r",
-                        response.status_code,
-                        response.text[:500],
-                    )
-                else:
-                    logger.error(
-                        "Whisper API failed: response is None (all attempts exhausted)"
-                    )
                 return None
 
             # Parse verbose_json response
@@ -1504,6 +1499,7 @@ class Transcriber:
         podcast_name: Optional[str],
         duration: float,
         whisper_settings: Dict[str, str],
+        language_override: Optional[str] = None,
     ) -> Optional[List[Dict]]:
         """Parallel chunked transcription for remote API backends.
 
@@ -1523,7 +1519,7 @@ class Transcriber:
                 f"Audio duration {duration/60:.1f}min fits in one chunk "
                 f"({chunk_duration}s), single-shot API transcription"
             )
-            return self.transcribe(audio_path, podcast_name)
+            return self.transcribe(audio_path, podcast_name, language_override=language_override)
 
         # Build chunk plan: list of (idx, start, end_with_overlap)
         plan: List[Tuple[int, float, float]] = []
@@ -1554,7 +1550,8 @@ class Transcriber:
                 return chunk_idx, None
             try:
                 segs = self._transcribe_via_api(
-                    chunk_path, podcast_name, whisper_settings
+                    chunk_path, podcast_name, whisper_settings,
+                    language_override=language_override,
                 )
                 if segs is None:
                     return chunk_idx, None
@@ -1578,20 +1575,40 @@ class Transcriber:
                         pass
 
         results: List[Optional[List[Dict]]] = [None] * num_chunks
-        completed = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+        failed = 0
+        # Managed manually (not `with`) so an early abort can return promptly:
+        # a `with` block's __exit__ calls shutdown(wait=True), which would
+        # re-block on the in-flight workers and defeat the short-circuit.
+        exe = ThreadPoolExecutor(max_workers=max_workers)
+        try:
             futures = [
                 exe.submit(_process_chunk, i, s, e) for i, s, e in plan
             ]
-            for fut in as_completed(futures):
+            for completed, fut in enumerate(as_completed(futures), 1):
                 chunk_idx, segs = fut.result()
                 results[chunk_idx] = segs
-                completed += 1
+                if segs is None:
+                    failed += 1
                 logger.info(
                     f"Chunk {chunk_idx + 1} complete "
                     f"({completed}/{num_chunks}): "
                     f"{len(segs) if segs else 0} segments"
                 )
+                # Short-circuit like the sequential path: once the failure
+                # budget is blown the run can't succeed, so stop instead of
+                # burning a full HTTP timeout on each remaining doomed chunk.
+                # Returning here still runs the finally below (pool shutdown).
+                if failed > max_failed_chunks:
+                    logger.error(
+                        f"Too many failed chunks ({failed} > {max_failed_chunks}); "
+                        f"aborting transcription early"
+                    )
+                    return None
+        finally:
+            # wait=False: return without blocking on in-flight workers (they
+            # finish in the background and self-clean temp files via
+            # _process_chunk's finally). cancel_futures drops queued chunks.
+            exe.shutdown(wait=False, cancel_futures=True)
 
         # Merge in chronological order so merge_overlapping_segments
         # dedupes overlap zones the same way the sequential path does.
@@ -1609,13 +1626,9 @@ class Transcriber:
                     all_segments, chunk_segs, c_start, overlap
                 )
 
-        if len(failed_chunks) > max_failed_chunks:
-            logger.error(
-                f"Too many failed chunks ({len(failed_chunks)} > "
-                f"{max_failed_chunks}); aborting transcription"
-            )
-            return None
-
+        # The as_completed loop above already aborts (returns None) once the
+        # failure budget is blown, so by here failures are within budget; the
+        # surviving failed_chunks only feed the gap-summary log below.
         original_count = len(all_segments)
         all_segments = self.filter_hallucinations(all_segments)
         if len(all_segments) < original_count:
@@ -1671,18 +1684,20 @@ class Transcriber:
             logger.error("Cannot determine audio duration for chunked transcription")
             return None
 
-        # Branch to parallel path for remote API backends — no GPU or
+        # Branch to parallel path for remote API backends - no GPU or
         # WhisperModelSingleton constraints, so chunks can run concurrently.
         whisper_settings = _get_whisper_settings()
         if whisper_settings['backend'] == WHISPER_BACKEND_API:
             return self._transcribe_chunked_parallel_api(
-                audio_path, podcast_name, duration, whisper_settings
+                audio_path, podcast_name, duration, whisper_settings,
+                language_override=language_override,
             )
 
-        # LOCAL backend: calculate chunk size from available memory
+        # Get current model and device for memory calculation
         model_name = WhisperModelSingleton.get_configured_model()
         device = os.getenv("WHISPER_DEVICE", "cpu")
 
+        # Calculate optimal chunk duration based on available memory
         chunk_duration, memory_reason = calculate_optimal_chunk_duration(
             model_name, device, whisper_backend=whisper_settings['backend']
         )

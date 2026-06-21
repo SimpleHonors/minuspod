@@ -184,7 +184,7 @@ function TranscriptionSection({
                     type="number"
                     id="transcribeMaxChunkSeconds"
                     value={transcribeMaxChunkSeconds}
-                    onChange={(e) => onTranscribeMaxChunkSecondsChange(parseInt(e.target.value, 10) || 0)}
+                    onChange={(e) => onTranscribeMaxChunkSecondsChange(parseInt(e.target.value, 10) || 600)}
                     min={1}
                     max={7200}
                     className="w-24 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
@@ -199,7 +199,7 @@ function TranscriptionSection({
                     type="number"
                     id="transcribeConcurrentChunks"
                     value={transcribeConcurrentChunks}
-                    onChange={(e) => onTranscribeConcurrentChunksChange(parseInt(e.target.value, 10) || 1)}
+                    onChange={(e) => onTranscribeConcurrentChunksChange(parseInt(e.target.value, 10) || 4)}
                     min={1}
                     max={32}
                     className="w-24 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
@@ -214,7 +214,7 @@ function TranscriptionSection({
                     type="number"
                     id="transcribeChunkOverlapSeconds"
                     value={transcribeChunkOverlapSeconds}
-                    onChange={(e) => onTranscribeChunkOverlapSecondsChange(parseInt(e.target.value, 10) || 0)}
+                    onChange={(e) => onTranscribeChunkOverlapSecondsChange(parseInt(e.target.value, 10) || 30)}
                     min={1}
                     max={600}
                     className="w-24 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground focus:outline-hidden focus:ring-2 focus:ring-ring"
@@ -223,10 +223,12 @@ function TranscriptionSection({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   These tune the parallel API path: chunks are extracted with ffmpeg and submitted to the
-                  remote backend concurrently. For Parakeet (30s ONNX cap) set max chunk to 28.
+                  remote backend concurrently. Chunks are extracted as (max chunk + overlap), so for
+                  Parakeet's 30s ONNX cap set max chunk to 28 AND overlap to 1.
                 </p>
               </div>
             </div>
+
           </>
         )}
 

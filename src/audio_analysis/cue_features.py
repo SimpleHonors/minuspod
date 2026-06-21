@@ -1,4 +1,4 @@
-"""MFCC feature extraction for audio cue templates (#350 v2).
+"""MFCC feature extraction for audio cue templates (#350).
 
 Pure numpy + scipy. No librosa. Used by both template ingest (compute MFCC
 from a user-selected episode window) and the per-episode template matcher
@@ -12,11 +12,11 @@ Audio path:
     -> 26-band mel filterbank
     -> log
     -> DCT-II (orthonormal) keep first ``n_coeffs`` coefficients (drop c0)
-    -> cepstral mean normalization (per-clip)
 
 We drop c0 because it tracks frame energy, which differs between user-marked
 windows and matching occurrences after compression/normalization. The first
-13 retained coeffs are ``c1..c13`` in DCT order.
+13 retained coeffs are ``c1..c13`` in DCT order. No cepstral mean
+normalization is applied -- see the note in :func:`compute_mfcc`.
 """
 from __future__ import annotations
 
@@ -87,9 +87,8 @@ def compute_mfcc(samples: np.ndarray, sample_rate: int = SAMPLE_RATE_HZ,
                  n_coeffs: int = N_COEFFS) -> np.ndarray:
     """Compute MFCC matrix for a mono float32 PCM array in [-1, 1].
 
-    Returns shape ``(n_frames, n_coeffs)`` float32 with cepstral mean
-    normalization applied. Returns an empty ``(0, n_coeffs)`` array when
-    the input is too short for even one frame.
+    Returns shape ``(n_frames, n_coeffs)`` float32. Returns an empty
+    ``(0, n_coeffs)`` array when the input is too short for even one frame.
     """
     if samples.ndim != 1:
         samples = samples.reshape(-1)
@@ -133,14 +132,14 @@ def compute_mfcc(samples: np.ndarray, sample_rate: int = SAMPLE_RATE_HZ,
     cepstrum = dct(log_mel, type=2, axis=1, norm='ortho')
     mfcc = cepstrum[:, 1:1 + n_coeffs].astype(np.float32)
 
-    # Note: no cepstral mean normalization here. CMN sounds attractive (it
-    # cancels stationary channel EQ) but applied per-input it normalizes the
-    # template against its own short-window mean and the haystack against
-    # its long-window mean -- two different baselines -- so even the cue's
-    # source episode scores ~0.4 against its own template. The matcher's
-    # cosine similarity is already magnitude-invariant; channel EQ
-    # differences across episodes of the same show are typically small
-    # enough that raw MFCCs still score >= 0.8 on a real recurrence.
+    # No cepstral mean normalization. CMN sounds attractive (it cancels
+    # stationary channel EQ) but applied per-input it normalizes the template
+    # against its own short-window mean and the haystack against its
+    # long-window mean -- two different baselines -- so even the cue's source
+    # episode scores ~0.4 against its own template. The matcher already
+    # zero-means each window before correlating, which is magnitude-invariant;
+    # channel EQ differences across episodes of the same show are typically
+    # small enough that raw MFCCs still score >= 0.8 on a real recurrence.
     return mfcc
 
 
@@ -184,6 +183,23 @@ def decode_pcm_window(audio_path: Path | str,
 
     pcm = np.frombuffer(raw, dtype='<i2').astype(np.float32) / 32768.0
     return pcm
+
+
+def pcm_to_int16_bytes(pcm: np.ndarray) -> bytes:
+    """Pack a mono float32 PCM array in [-1, 1] as little-endian int16 bytes.
+
+    This is the raw-PCM source-of-truth stored alongside the derived MFCC so a
+    template can be re-derived if the MFCC params ever change, and exported as
+    a lossless WAV. Inverse of the ``<i2 / 32768`` decode in
+    :func:`decode_pcm_window`.
+    """
+    clipped = np.clip(pcm, -1.0, 1.0)
+    return (clipped * 32767.0).round().astype('<i2').tobytes()
+
+
+def int16_bytes_to_pcm(blob: bytes) -> np.ndarray:
+    """Inverse of :func:`pcm_to_int16_bytes`; returns float32 PCM in [-1, 1]."""
+    return np.frombuffer(blob, dtype='<i2').astype(np.float32) / 32768.0
 
 
 def serialize_mfcc(mfcc: np.ndarray) -> bytes:

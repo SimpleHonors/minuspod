@@ -1,4 +1,4 @@
-"""Synthesize ad spans from unmatched cue pairs (#350 v2).
+"""Synthesize ad spans from unmatched cue pairs (#350).
 
 Some shows bracket every ad break with a stinger sound. When the LLM misses
 a break entirely (no spoken sponsor copy is detected, or the model bails on
@@ -20,22 +20,37 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from config import (
+    AUDIO_CUE_PAIR_CONFIDENCE,
+    AUDIO_CUE_PAIR_MIN_BREAK_SECONDS,
+    AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
+    AUDIO_CUE_ROLE_DEFAULT,
+    AUDIO_CUE_START_EDGE_ROLES,
+    AUDIO_CUE_END_EDGE_ROLES,
+    is_template_cue,
+)
+
 logger = logging.getLogger('podcast.claude.cue_pair')
 
 
-# Minimum confidence a cue must carry to participate in pair-based ad
-# synthesis. Tighter than the snap threshold (0.80) because synthesis
-# *creates* ads rather than just refining them.
-DEFAULT_MIN_PAIR_CONFIDENCE = 0.85
-# Plausible break-duration band: a cue pair separated by less than the
-# minimum is more likely an intro flourish or a double-tap stinger, and a
-# pair separated by more than the maximum is more likely two unrelated ad
-# breaks back-to-back rather than one bracketing pair.
-DEFAULT_MIN_BREAK_S = 30.0
-DEFAULT_MAX_BREAK_S = 480.0
+# Defaults (DB-settable; the caller threads the live values in). Minimum
+# confidence is tighter than the snap threshold because synthesis *creates*
+# ads rather than just refining them. The break-duration band rejects pairs
+# too close (intro flourish / double-tap stinger) or too far apart (two
+# unrelated breaks rather than one bracketing pair).
+DEFAULT_MIN_PAIR_CONFIDENCE = AUDIO_CUE_PAIR_CONFIDENCE
+DEFAULT_MIN_BREAK_S = AUDIO_CUE_PAIR_MIN_BREAK_SECONDS
+DEFAULT_MAX_BREAK_S = AUDIO_CUE_PAIR_MAX_BREAK_SECONDS
 # An LLM-detected ad that overlaps a cue pair by this many seconds (on
 # either side) is treated as "already covers it" and the pair is skipped.
 OVERLAP_TOLERANCE_S = 5.0
+
+# A pair spans an opener cue -> a later closer cue. A 'boundary' cue (and the
+# role-less spectral fallback) can play either part, so the all-boundary case
+# behaves exactly as before; a 'start'-typed cue can only open and an 'end'
+# can only close, which stops two break-entry stingers from pairing into a
+# span that covers the show content between two separate breaks. 'non_ad'
+# (intro/outro) cues match neither set, so they are never opener or closer.
 
 
 @dataclass
@@ -45,6 +60,7 @@ class _Cue:
     confidence: float
     label: Optional[str]
     template_id: Optional[int]
+    role: str
 
 
 def synthesize_ads_from_cue_pairs(
@@ -70,6 +86,12 @@ def synthesize_ads_from_cue_pairs(
     if not audio_analysis_result:
         return list(ads)
     raw_cues = audio_analysis_result.get_signals_by_type('audio_cue')
+    # Only precise template cues may *create* ads. Spectral-fallback cues (no
+    # 'source' key) are too coarse to synthesize from: on a no-template feed a
+    # dense burst section pairs them into dozens of overlapping false ads. They
+    # still inform the LLM prompt as supporting evidence; they just cannot mint
+    # an ad on their own. The opener/closer role checks below additionally
+    # exclude 'non_ad' (intro/outro) cues.
     cues = sorted(
         (_Cue(
             start=float(c.start),
@@ -77,7 +99,9 @@ def synthesize_ads_from_cue_pairs(
             confidence=float(c.confidence),
             label=(c.details or {}).get('label'),
             template_id=(c.details or {}).get('template_id'),
-        ) for c in raw_cues if c.confidence >= min_confidence),
+            role=(c.details or {}).get('role', AUDIO_CUE_ROLE_DEFAULT),
+        ) for c in raw_cues
+        if c.confidence >= min_confidence and is_template_cue(c.details)),
         key=lambda x: x.start,
     )
     if len(cues) < 2:
@@ -92,10 +116,14 @@ def synthesize_ads_from_cue_pairs(
         if consumed[i]:
             continue
         cue_a = cues[i]
+        if cue_a.role not in AUDIO_CUE_START_EDGE_ROLES:
+            continue
         for j in range(i + 1, len(cues)):
             if consumed[j]:
                 continue
             cue_b = cues[j]
+            if cue_b.role not in AUDIO_CUE_END_EDGE_ROLES:
+                continue
             gap = cue_b.start - cue_a.end
             if gap < min_break_s:
                 # Too close: probably the same boundary's stinger reflected
@@ -106,7 +134,7 @@ def synthesize_ads_from_cue_pairs(
                 break
             synth_start = round(cue_a.end + 0.05, 3)
             synth_end = round(cue_b.start - 0.05, 3)
-            if _covered_by_existing_ad(ads, synth_start, synth_end):
+            if _covered_by_existing_ad(new_ads, synth_start, synth_end):
                 consumed[i] = True
                 consumed[j] = True
                 break
@@ -156,7 +184,12 @@ def synthesize_ads_from_cue_pairs(
 
 
 def _covered_by_existing_ad(ads: List[Dict], start: float, end: float) -> bool:
-    """True iff an existing LLM ad overlaps ``[start, end]`` within the tolerance."""
+    """True iff an existing ad overlaps ``[start, end]`` within the tolerance.
+
+    ``ads`` is the growing list (input LLM ads plus already-synthesized spans),
+    so this both skips pairs an LLM ad already covers and prevents a clustered
+    or duplicated cue list from minting overlapping synthetic ads.
+    """
     for ad in ads:
         try:
             a_start = float(ad['start'])

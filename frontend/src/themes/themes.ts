@@ -557,30 +557,20 @@ export const THEMES: ThemePair[] = [
     group: 'Other',
     light: null,
     dark: {
-      // True-black OLED theme. The page sits at ~2% lightness (perceptually black,
-      // pixels effectively off) but carries a faint cool-blue hue (222) so every
-      // surface lifts from a shared material rather than reading as grey patches
-      // pasted on a void. Depth is carried by a brighter-than-surface hairline
-      // border, not by fill lightness -- that is what keeps it premium, not flat.
       background: '222 18% 2%',
       foreground: '210 14% 92%',
       card: '222 16% 6%',
       'card-foreground': '210 14% 92%',
-      // Brand teal, brightened + saturated so it glows on true black instead of
-      // going muddy. Foreground is near-black for crisp text on the accent.
       primary: '188 72% 56%',
       'primary-foreground': '200 30% 6%',
       secondary: '222 14% 10%',
       'secondary-foreground': '210 14% 92%',
       muted: '222 14% 9%',
-      // ~6.2:1 on card -> clears WCAG AA for secondary text with margin.
       'muted-foreground': '215 12% 60%',
       accent: '222 14% 12%',
       'accent-foreground': '210 16% 96%',
       destructive: '0 72% 58%',
       'destructive-foreground': '0 0% 100%',
-      // Border is the brightest structural element so card/header/modal edges
-      // stay crisp against black; inputs recede one step until focused.
       border: '222 12% 16%',
       input: '222 12% 14%',
       ring: '188 72% 56%',
