@@ -6,6 +6,7 @@ Blocks private/reserved IPs, restricted schemes, and cloud metadata endpoints.
 import ipaddress
 import logging
 import socket
+import time
 from urllib.parse import urlparse
 
 from utils.constants import ALLOWED_URL_SCHEMES, ALLOWED_URL_PORTS
@@ -22,6 +23,29 @@ _CLOUD_METADATA_IPS = frozenset({
 class SSRFError(ValueError):
     """Raised when a URL fails SSRF validation."""
     pass
+
+
+def _resolve_with_retry(host, port, *, attempts=3, base_delay=0.15):
+    """Resolve host:port to addrinfos, retrying transient DNS failures.
+
+    Inside the container, name resolution goes through Docker's embedded
+    resolver, which drops lookups when many feeds refresh concurrently. A
+    single dropped lookup surfaces as ``socket.gaierror`` even though the
+    name is perfectly resolvable a moment later, which the SSRF guard would
+    otherwise treat as a hard "Cannot resolve hostname" and fail the feed.
+    Retry a few times with a short backoff before giving up.
+
+    Raises ``socket.gaierror`` if every attempt fails.
+    """
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            return socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(base_delay * (attempt + 1))
+    raise last_exc
 
 
 def validate_url(url: str) -> str:
@@ -69,7 +93,7 @@ def validate_url(url: str) -> str:
     # SNI via the Host header). Not implemented; tracked as a follow-up
     # issue titled "Pin resolved IP for SSRF TOCTOU closure".
     try:
-        addrinfos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+        addrinfos = _resolve_with_retry(hostname, port)
     except socket.gaierror:
         raise SSRFError(f"Cannot resolve hostname: {hostname!r}")
 
@@ -148,7 +172,7 @@ def validate_base_url(url: str) -> str:
     if port is None:
         port = 443 if scheme == 'https' else 80
     try:
-        addrinfos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        addrinfos = _resolve_with_retry(host, port)
     except socket.gaierror:
         # Unresolvable host: the request fails at connect time and reaches no
         # internal IP, so there is nothing to block. Allow (the strict
