@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useSyncFromQuery } from '../hooks/useSyncFromQuery';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +29,8 @@ import AIModelsSection from './settings/AIModelsSection';
 import StageTunablesSection from './settings/StageTunablesSection';
 import TranscriptionSection from './settings/TranscriptionSection';
 import AudioSection from './settings/AudioSection';
+import CoverArtSection from './settings/CoverArtSection';
+import { refreshAllArtwork } from '../api/feeds';
 import AdDetectionSection from './settings/AdDetectionSection';
 import GlobalDefaultsSection from './settings/GlobalDefaultsSection';
 import Podcasting20Section from './settings/Podcasting20Section';
@@ -37,9 +39,14 @@ import ExperimentsSection from './settings/ExperimentsSection';
 import AudioCueDetectionSection from './settings/AudioCueDetectionSection';
 import PositionalPriorSection from './settings/PositionalPriorSection';
 import CommunityPatternsSection from './settings/CommunityPatternsSection';
+import { Search, X } from 'lucide-react';
+import { SettingsSearchContext, useSettingsSearch } from '../context/SettingsSearchContext';
 import { formatModelLabel } from './settings/settingsUtils';
 
 function SettingsGroupHeader({ title }: { title: string }) {
+  // During an active settings search the group labels are noise (sections are
+  // filtered individually), so hide them and let the matching cards stand alone.
+  if (useSettingsSearch() !== null) return null;
   return (
     <div className="pt-4 pb-1">
       <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -89,14 +96,73 @@ function Settings() {
     pairConfidence: 0.85,
     pairMinBreakSeconds: 30,
     pairMaxBreakSeconds: 480,
+    pairMaxBreakFraction: 0.5,
   });
   const [positionalPriorEnabled, setPositionalPriorEnabled] = useState(false);
+  const [settingsQuery, setSettingsQuery] = useState('');
+  // null = no active search; otherwise the set of matching section keys.
+  // Computed in the event handler (the lint forbids ref reads in render and
+  // setState in effects); hidden sections keep their textContent, so each
+  // keystroke can rescan every section.
+  const [settingsMatchKeys, setSettingsMatchKeys] = useState<Set<string> | null>(null);
+  const searchRegionRef = useRef<HTMLDivElement>(null);
+  const runSettingsSearch = (q: string) => {
+    setSettingsQuery(q);
+    const norm = q.trim().toLowerCase();
+    if (!norm) {
+      setSettingsMatchKeys(null);
+      return;
+    }
+    // Scope the scan to the searchable region so the two sections above the
+    // search box (System Status, Processing Queue) don't count toward matches.
+    const matches = new Set<string>();
+    searchRegionRef.current?.querySelectorAll<HTMLElement>('[data-search-key]').forEach((el) => {
+      if ((el.textContent ?? '').toLowerCase().includes(norm)) {
+        const key = el.getAttribute('data-search-key');
+        if (key) matches.add(key);
+      }
+    });
+    setSettingsMatchKeys(matches);
+  };
+  // Paint the matched query text yellow within the searchable region as the user
+  // types -- CSS Custom Highlight API, so no DOM mutation and React stays in
+  // charge of the tree. Runs after the filter commit so ranges point at the
+  // freshly expanded sections; no-op where the API is unavailable (filtering
+  // still works). offsetParent skips text in display:none (non-matching) cards.
+  useEffect(() => {
+    if (typeof CSS === 'undefined' || !('highlights' in CSS)) return;
+    const norm = settingsQuery.trim().toLowerCase();
+    const region = searchRegionRef.current;
+    if (!norm || !region) {
+      CSS.highlights.delete('settings-search');
+      return;
+    }
+    const ranges: Range[] = [];
+    const walker = document.createTreeWalker(region, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.nodeValue && n.parentElement?.offsetParent
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    });
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const hay = n.nodeValue!.toLowerCase();
+      for (let i = hay.indexOf(norm); i !== -1; i = hay.indexOf(norm, i + norm.length)) {
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + norm.length);
+        ranges.push(r);
+      }
+    }
+    CSS.highlights.set('settings-search', new Highlight(...ranges));
+    return () => { CSS.highlights.delete('settings-search'); };
+  }, [settingsQuery, settingsMatchKeys]);
   const [selectedModel, setSelectedModel] = useState('');
   const [verificationModel, setVerificationModel] = useState('');
   const [whisperModel, setWhisperModel] = useState('');
   const [autoProcessEnabled, setAutoProcessEnabled] = useState(false);
   const [maxFeedEpisodes, setMaxFeedEpisodes] = useState(0);
   const [onlyExposeProcessedDefault, setOnlyExposeProcessedDefault] = useState(false);
+  const [artworkWatermarkEnabled, setArtworkWatermarkEnabled] = useState(false);
   const [audioBitrate, setAudioBitrate] = useState('');
   const [audioNormalizeEnabled, setAudioNormalizeEnabled] = useState(false);
   const [audioNormalizeIntensity, setAudioNormalizeIntensity] = useState('normal');
@@ -315,6 +381,7 @@ function Settings() {
       setAutoProcessEnabled(settings.autoProcessEnabled?.value ?? d.autoProcessEnabled);
       setMaxFeedEpisodes(settings.maxFeedEpisodes?.value ?? d.maxFeedEpisodes);
       setOnlyExposeProcessedDefault(settings.onlyExposeProcessedDefault?.value ?? d.onlyExposeProcessedDefault);
+      setArtworkWatermarkEnabled(settings.artworkWatermarkEnabled?.value ?? d.artworkWatermarkEnabled);
       setAudioBitrate(settings.audioBitrate?.value || d.audioBitrate);
       setAudioNormalizeEnabled(settings.audioNormalizeEnabled?.value ?? d.audioNormalizeEnabled);
       setAudioNormalizeIntensity(settings.audioNormalizeIntensity?.value || d.audioNormalizeIntensity);
@@ -335,6 +402,7 @@ function Settings() {
         pairConfidence: settings.audioCuePairConfidence?.value ?? d.audioCuePairConfidence ?? 0.85,
         pairMinBreakSeconds: settings.audioCuePairMinBreakSeconds?.value ?? d.audioCuePairMinBreakSeconds ?? 30,
         pairMaxBreakSeconds: settings.audioCuePairMaxBreakSeconds?.value ?? d.audioCuePairMaxBreakSeconds ?? 480,
+        pairMaxBreakFraction: settings.audioCuePairMaxBreakFraction?.value ?? d.audioCuePairMaxBreakFraction ?? 0.5,
       });
       setPositionalPriorEnabled(
         settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled);
@@ -398,6 +466,7 @@ function Settings() {
     if (audioCue.pairConfidence !== (settings.audioCuePairConfidence?.value ?? d.audioCuePairConfidence ?? 0.85)) payload.audioCuePairConfidence = audioCue.pairConfidence;
     if (audioCue.pairMinBreakSeconds !== (settings.audioCuePairMinBreakSeconds?.value ?? d.audioCuePairMinBreakSeconds ?? 30)) payload.audioCuePairMinBreakSeconds = audioCue.pairMinBreakSeconds;
     if (audioCue.pairMaxBreakSeconds !== (settings.audioCuePairMaxBreakSeconds?.value ?? d.audioCuePairMaxBreakSeconds ?? 480)) payload.audioCuePairMaxBreakSeconds = audioCue.pairMaxBreakSeconds;
+    if (audioCue.pairMaxBreakFraction !== (settings.audioCuePairMaxBreakFraction?.value ?? d.audioCuePairMaxBreakFraction ?? 0.5)) payload.audioCuePairMaxBreakFraction = audioCue.pairMaxBreakFraction;
     if (positionalPriorEnabled !== (settings.positionalPriorEnabled?.value ?? d.positionalPriorEnabled)) payload.positionalPriorEnabled = positionalPriorEnabled;
     if (selectedModel !== (settings.claudeModel?.value || '')) payload.claudeModel = selectedModel;
     if (verificationModel !== (settings.verificationModel?.value || '')) payload.verificationModel = verificationModel;
@@ -420,6 +489,7 @@ function Settings() {
 
     if (autoProcessEnabled !== (settings.autoProcessEnabled?.value ?? d.autoProcessEnabled)) payload.autoProcessEnabled = autoProcessEnabled;
     if (onlyExposeProcessedDefault !== (settings.onlyExposeProcessedDefault?.value ?? d.onlyExposeProcessedDefault)) payload.onlyExposeProcessedDefault = onlyExposeProcessedDefault;
+    if (artworkWatermarkEnabled !== (settings.artworkWatermarkEnabled?.value ?? d.artworkWatermarkEnabled)) payload.artworkWatermarkEnabled = artworkWatermarkEnabled;
     if (vttTranscriptsEnabled !== (settings.vttTranscriptsEnabled?.value ?? d.vttTranscriptsEnabled)) payload.vttTranscriptsEnabled = vttTranscriptsEnabled;
     if (chaptersEnabled !== (settings.chaptersEnabled?.value ?? d.chaptersEnabled)) payload.chaptersEnabled = chaptersEnabled;
     if (maxFeedEpisodes !== (settings.maxFeedEpisodes?.value ?? d.maxFeedEpisodes)) payload.maxFeedEpisodes = maxFeedEpisodes;
@@ -442,7 +512,7 @@ function Settings() {
     if (reviewerPatternsChanged()) return true;
     return podcastIndexApiKey !== '' && podcastIndexApiSecret !== '';
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [systemPrompt, verificationPrompt, reviewer, audioCue, positionalPriorEnabled, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, audioBitrate, audioNormalizeEnabled, audioNormalizeIntensity, skipFlacCompression, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, podcastIndexApiKey, podcastIndexApiSecret, settings, reviewerSettings]);
+  }, [systemPrompt, verificationPrompt, reviewer, audioCue, positionalPriorEnabled, selectedModel, verificationModel, whisperModel, autoProcessEnabled, maxFeedEpisodes, onlyExposeProcessedDefault, artworkWatermarkEnabled, audioBitrate, audioNormalizeEnabled, audioNormalizeIntensity, skipFlacCompression, vttTranscriptsEnabled, chaptersEnabled, chaptersModel, minCutConfidence, llmProvider, openaiBaseUrl, whisperBackend, whisperApiConfig.baseUrl, whisperApiConfig.model, whisperLanguage, whisperComputeType, transcribeMaxChunkSeconds, transcribeConcurrentChunks, transcribeChunkOverlapSeconds, podcastIndexApiKey, podcastIndexApiSecret, settings, reviewerSettings]);
 
   // Mirror hasChanges into render-readable state so the hydration guard above
   // (which runs before hasChanges is defined) skips re-seeding while dirty.
@@ -507,6 +577,10 @@ function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['models'] });
     },
+  });
+
+  const refreshArtworkMutation = useMutation({
+    mutationFn: refreshAllArtwork,
   });
 
   const resetMutation = useMutation({
@@ -580,6 +654,39 @@ function Settings() {
         onCancel={(params) => cancelMutation.mutate(params)}
         cancelIsPending={cancelMutation.isPending}
       />
+
+      {/* Settings search: filters the configurable sections below by matching a
+          section's title or any of its setting labels (client-side, no backend). */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={settingsQuery}
+          onChange={(e) => runSettingsSearch(e.target.value)}
+          placeholder="Search settings..."
+          aria-label="Search settings"
+          className="w-full rounded-lg border border-input bg-background text-foreground placeholder:text-muted-foreground pl-9 pr-9 py-2 focus:outline-hidden focus:ring-2 focus:ring-ring"
+        />
+        {settingsQuery && (
+          <button
+            type="button"
+            onClick={() => runSettingsSearch('')}
+            aria-label="Clear settings search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted-foreground hover:text-foreground touch-manipulation"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      <SettingsSearchContext.Provider value={settingsMatchKeys}>
+      <div ref={searchRegionRef} className="space-y-4">
+
+      {settingsMatchKeys !== null && settingsMatchKeys.size === 0 && (
+        <p className="text-sm text-muted-foreground px-1">
+          No settings match "{settingsQuery.trim()}".
+        </p>
+      )}
 
       <SettingsGroupHeader title="Appearance" />
 
@@ -749,6 +856,13 @@ function Settings() {
         onChaptersEnabledChange={setChaptersEnabled}
       />
 
+      <CoverArtSection
+        artworkWatermarkEnabled={artworkWatermarkEnabled}
+        onArtworkWatermarkEnabledChange={setArtworkWatermarkEnabled}
+        onRefreshArtwork={() => refreshArtworkMutation.mutate()}
+        refreshArtworkPending={refreshArtworkMutation.isPending}
+      />
+
       <SettingsGroupHeader title="Data & Security" />
 
       <StorageRetentionSection
@@ -787,6 +901,9 @@ function Settings() {
         cryptoReady={providersState?.cryptoReady ?? false}
         plaintextSecretsCount={status?.security?.plaintextSecretsCount ?? 0}
       />
+
+      </div>
+      </SettingsSearchContext.Provider>
 
       {/* Error display */}
       {(updateMutation.error || resetMutation.error || resetPromptsMutation.error) && (

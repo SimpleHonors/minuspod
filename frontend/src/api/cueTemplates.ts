@@ -7,7 +7,8 @@ export type CueTemplateType =
   | 'ad_break_start'
   | 'ad_break_end'
   | 'show_intro'
-  | 'show_outro';
+  | 'show_outro'
+  | 'content_transition';
 
 // Fixed cue-type vocabulary for the capture dropdown. The label here is the
 // human option text; the server keeps its own canonical phrase for the LLM.
@@ -17,6 +18,7 @@ export const CUE_TYPE_OPTIONS: { value: CueTemplateType; label: string }[] = [
   { value: 'ad_break_end', label: 'Ad-break end' },
   { value: 'show_intro', label: 'Show intro (not an ad)' },
   { value: 'show_outro', label: 'Show outro (not an ad)' },
+  { value: 'content_transition', label: 'Content transition (not an ad)' },
 ];
 
 export function cueTypeLabel(cueType: CueTemplateType): string {
@@ -56,6 +58,11 @@ export interface CueTemplate {
   // False for a network template shared from another feed in this network;
   // such rows are read-only here and managed on the feed that created them.
   owned?: boolean;
+  // Create-response only: how many times the captured cue recurs in its source
+  // episode, and whether that makes it a weak (non-recurring) ad-break cue.
+  // Absent on list rows.
+  selfMatchCount?: number;
+  weakCue?: boolean;
 }
 
 export interface CueTemplateListResponse {
@@ -184,7 +191,6 @@ export async function scanEpisodeCues(
 export interface CueCandidate {
   start: number;
   end: number;
-  prominenceDb: number | null;
   count: number;
 }
 
@@ -199,10 +205,10 @@ export interface CueCandidatesResponse {
   error?: string;
 }
 
-// On-demand scan: decode the audio, cluster loud bursts by similarity, and
-// return only sounds that recur (the ones worth templating). The scan is slow,
-// so the server runs it in the background and returns a status to poll; pass
-// rescan to force a fresh run after an error.
+// On-demand scan: fingerprint the whole episode and return the sounds that
+// recur across it (the ones worth templating). Loudness-independent, so it
+// catches level-matched stings. The scan runs in the background and returns a
+// status to poll; pass rescan to force a fresh run after an error.
 export async function getCueCandidates(
   slug: string,
   episodeId: string,

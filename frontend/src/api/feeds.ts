@@ -120,6 +120,12 @@ export async function refreshAllFeeds(
   });
 }
 
+export async function refreshAllArtwork(): Promise<{ message: string; feedCount: number }> {
+  return apiRequest<{ message: string; feedCount: number }>('/feeds/refresh-artwork', {
+    method: 'POST',
+  });
+}
+
 export interface EpisodesResponse {
   episodes: Episode[];
   total: number;
@@ -159,7 +165,7 @@ export async function getArtwork(slug: string): Promise<string> {
 export async function reprocessEpisode(
   slug: string,
   episodeId: string,
-  mode: 'reprocess' | 'full' | 'llm' = 'reprocess'
+  mode: 'reprocess' | 'full' | 'llm' | 'recut' = 'reprocess'
 ): Promise<{ message: string; mode: string }> {
   return apiRequest<{ message: string; mode: string }>(`/episodes/${slug}/${episodeId}/reprocess`, {
     method: 'POST',

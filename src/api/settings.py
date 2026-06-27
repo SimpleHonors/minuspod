@@ -120,7 +120,7 @@ def get_settings():
         AUDIO_CUE_CAPTURE_MIN_SECONDS, AUDIO_CUE_CAPTURE_MAX_SECONDS,
         AUDIO_CUE_CAPTURE_MAX_INTRO_SECONDS, AUDIO_CUE_CAPTURE_MAX_OUTRO_SECONDS,
         AUDIO_CUE_PAIR_CONFIDENCE, AUDIO_CUE_PAIR_MIN_BREAK_SECONDS,
-        AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
+        AUDIO_CUE_PAIR_MAX_BREAK_SECONDS, AUDIO_CUE_PAIR_MAX_BREAK_FRACTION,
     )
     from chapters_generator import CHAPTERS_MODEL
     settings = _settings_view(db.get_all_settings())
@@ -153,6 +153,10 @@ def get_settings():
         settings, 'only_expose_processed_default', 'false')
     only_expose_processed_default = (
         only_expose_processed_value.lower() in ('true', '1', 'yes'))
+    artwork_watermark_value = _setting_value(
+        settings, 'artwork_watermark_enabled', 'false')
+    artwork_watermark_enabled = (
+        artwork_watermark_value.lower() in ('true', '1', 'yes'))
 
     try:
         max_feed_episodes = int(_setting_value(settings, 'max_feed_episodes', '300'))
@@ -339,6 +343,7 @@ def get_settings():
     audio_cue_pair_conf = _cue_num('audio_cue_pair_confidence', AUDIO_CUE_PAIR_CONFIDENCE)
     audio_cue_pair_min_break = _cue_num('audio_cue_pair_min_break_seconds', AUDIO_CUE_PAIR_MIN_BREAK_SECONDS)
     audio_cue_pair_max_break = _cue_num('audio_cue_pair_max_break_seconds', AUDIO_CUE_PAIR_MAX_BREAK_SECONDS)
+    audio_cue_pair_max_break_fraction = _cue_num('audio_cue_pair_max_break_fraction', AUDIO_CUE_PAIR_MAX_BREAK_FRACTION)
 
     return json_response({
         'systemPrompt': _sv('system_prompt', _setting_value(settings, 'system_prompt', DEFAULT_SYSTEM_PROMPT) or DEFAULT_SYSTEM_PROMPT),
@@ -355,6 +360,8 @@ def get_settings():
         'maxFeedEpisodes': _sv('max_feed_episodes', max_feed_episodes),
         'onlyExposeProcessedDefault': _sv(
             'only_expose_processed_default', only_expose_processed_default),
+        'artworkWatermarkEnabled': _sv(
+            'artwork_watermark_enabled', artwork_watermark_enabled),
         'vttTranscriptsEnabled': _sv('vtt_transcripts_enabled', vtt_enabled),
         'chaptersEnabled': _sv('chapters_enabled', chapters_enabled),
         'chaptersModel': _sv('chapters_model', chapters_model),
@@ -389,6 +396,7 @@ def get_settings():
         'audioCuePairConfidence': _sv('audio_cue_pair_confidence', audio_cue_pair_conf),
         'audioCuePairMinBreakSeconds': _sv('audio_cue_pair_min_break_seconds', audio_cue_pair_min_break),
         'audioCuePairMaxBreakSeconds': _sv('audio_cue_pair_max_break_seconds', audio_cue_pair_max_break),
+        'audioCuePairMaxBreakFraction': _sv('audio_cue_pair_max_break_fraction', audio_cue_pair_max_break_fraction),
         'positionalPriorEnabled': _sv('positional_prior_enabled', positional_prior_enabled),
         'audioBitrate': _sv('audio_bitrate', audio_bitrate),
         'audioNormalizeEnabled': _sv('audio_normalize_enabled', audio_normalize_enabled),
@@ -420,6 +428,7 @@ def get_settings():
             'autoProcessEnabled': True,
             'maxFeedEpisodes': 300,
             'onlyExposeProcessedDefault': False,
+            'artworkWatermarkEnabled': False,
             'vttTranscriptsEnabled': True,
             'chaptersEnabled': True,
             'chaptersModel': CHAPTERS_MODEL,
@@ -452,6 +461,7 @@ def get_settings():
             'audioCuePairConfidence': AUDIO_CUE_PAIR_CONFIDENCE,
             'audioCuePairMinBreakSeconds': AUDIO_CUE_PAIR_MIN_BREAK_SECONDS,
             'audioCuePairMaxBreakSeconds': AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
+            'audioCuePairMaxBreakFraction': AUDIO_CUE_PAIR_MAX_BREAK_FRACTION,
             'audioBitrate': DEFAULT_AUDIO_BITRATE,
             'audioNormalizeEnabled': False,
             'audioNormalizeIntensity': 'normal',
@@ -597,6 +607,11 @@ def _apply_processing_flags(db, data):
         value = 'true' if data['onlyExposeProcessedDefault'] else 'false'
         db.set_setting('only_expose_processed_default', value, is_default=False)
         logger.info(f"Updated only-expose-processed default to: {value}")
+
+    if 'artworkWatermarkEnabled' in data:
+        value = 'true' if data['artworkWatermarkEnabled'] else 'false'
+        db.set_setting('artwork_watermark_enabled', value, is_default=False)
+        logger.info(f"Updated artwork watermark to: {value}")
 
     if 'vttTranscriptsEnabled' in data:
         value = 'true' if data['vttTranscriptsEnabled'] else 'false'
@@ -960,6 +975,7 @@ def _apply_audio_cue_fields(db, data):
         ('audioCuePairConfidence', 'audio_cue_pair_confidence', 0.0, 1.0),
         ('audioCuePairMinBreakSeconds', 'audio_cue_pair_min_break_seconds', 1.0, 600.0),
         ('audioCuePairMaxBreakSeconds', 'audio_cue_pair_max_break_seconds', 1.0, 3600.0),
+        ('audioCuePairMaxBreakFraction', 'audio_cue_pair_max_break_fraction', 0.0, 1.0),
     ):
         if field_name not in data:
             continue
@@ -1197,6 +1213,7 @@ def reset_ad_detection_settings():
     db.reset_setting('audio_cue_pair_confidence')
     db.reset_setting('audio_cue_pair_min_break_seconds')
     db.reset_setting('audio_cue_pair_max_break_seconds')
+    db.reset_setting('audio_cue_pair_max_break_fraction')
 
     # Per-stage LLM tunables (temperature, max tokens, reasoning, Ollama context
     # window, detection-window geometry). reset_setting clears each row so

@@ -50,6 +50,11 @@ export interface Episode {
   hasOriginalAudio?: boolean;
 }
 
+export interface EpisodeNeighbor {
+  id: string;
+  title: string;
+}
+
 export interface EpisodeDetail extends Episode {
   description?: string;
   originalUrl?: string;
@@ -79,6 +84,9 @@ export interface EpisodeDetail extends Episode {
   inputTokens?: number;
   outputTokens?: number;
   llmCost?: number;
+  // Adjacent episodes in the same feed (newest-first order): `previous` is the
+  // newer episode, `next` the older one. Either is null at a feed boundary.
+  navigation?: { previous: EpisodeNeighbor | null; next: EpisodeNeighbor | null };
 }
 
 // Per-cue detection telemetry (#350 follow-up). One row per template cue the
@@ -185,6 +193,7 @@ export interface Settings {
   maxFeedEpisodes: SettingValueNumber;
   combinedFeedEpisodeLimit: SettingValueNumber;
   onlyExposeProcessedDefault: SettingValueBoolean;
+  artworkWatermarkEnabled: SettingValueBoolean;
   audioBitrate: SettingValue;
   audioNormalizeEnabled: SettingValueBoolean;
   audioNormalizeIntensity: SettingValue;
@@ -209,6 +218,7 @@ export interface Settings {
   audioCuePairConfidence: SettingValueNumber;
   audioCuePairMinBreakSeconds: SettingValueNumber;
   audioCuePairMaxBreakSeconds: SettingValueNumber;
+  audioCuePairMaxBreakFraction: SettingValueNumber;
   positionalPriorEnabled: SettingValueBoolean;
   vttTranscriptsEnabled: SettingValueBoolean;
   chaptersEnabled: SettingValueBoolean;
@@ -242,6 +252,7 @@ export interface Settings {
     maxFeedEpisodes: number;
     combinedFeedEpisodeLimit: number;
     onlyExposeProcessedDefault: boolean;
+    artworkWatermarkEnabled: boolean;
     vttTranscriptsEnabled: boolean;
     chaptersEnabled: boolean;
     chaptersModel: string;
@@ -278,6 +289,7 @@ export interface Settings {
     audioCuePairConfidence: number;
     audioCuePairMinBreakSeconds: number;
     audioCuePairMaxBreakSeconds: number;
+    audioCuePairMaxBreakFraction: number;
     positionalPriorEnabled: boolean;
   };
 }
@@ -297,6 +309,7 @@ export interface UpdateSettingsPayload {
   maxFeedEpisodes?: number;
   combinedFeedEpisodeLimit?: number;
   onlyExposeProcessedDefault?: boolean;
+  artworkWatermarkEnabled?: boolean;
   audioBitrate?: string;
   audioNormalizeEnabled?: boolean;
   audioNormalizeIntensity?: string;
@@ -321,6 +334,7 @@ export interface UpdateSettingsPayload {
   audioCuePairConfidence?: number;
   audioCuePairMinBreakSeconds?: number;
   audioCuePairMaxBreakSeconds?: number;
+  audioCuePairMaxBreakFraction?: number;
   positionalPriorEnabled?: boolean;
   vttTranscriptsEnabled?: boolean;
   chaptersEnabled?: boolean;

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useLocalStorageState } from '../hooks/useLocalStorageState';
+import { useSettingsSearch } from '../context/SettingsSearchContext';
 
 interface CollapsibleSectionProps {
   title: string;
@@ -33,6 +34,17 @@ function CollapsibleSection({
   const contentRef = useRef<HTMLDivElement>(null);
   const [maxHeight, setMaxHeight] = useState<string>(isOpen ? 'none' : '0px');
 
+  // Settings search: the Settings page publishes the set of matching section
+  // keys via context (null = no search); data-search-key on the card lets its
+  // scan find this section. Inert outside Settings (default null).
+  const matchKeys = useSettingsSearch();
+  const searching = matchKeys !== null;
+  const matchesSearch = searching && matchKeys.has(resolvedKey);
+  const hiddenBySearch = searching && !matchesSearch;
+  const expanded = searching ? matchesSearch : isOpen;
+  let contentMaxHeight = maxHeight;
+  if (searching) contentMaxHeight = matchesSearch ? 'none' : '0px';
+
   useEffect(() => {
     if (isOpen) {
       const el = contentRef.current;
@@ -58,7 +70,10 @@ function CollapsibleSection({
   // are reflected in the animation. Cost is negligible (single DOM read).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (isOpen && maxHeight !== 'none') {
+    // Skip while a search is active: a non-matching section is display:none, so
+    // scrollHeight reads 0 and would clobber the stored height, collapsing the
+    // section for a frame when the search clears.
+    if (!searching && isOpen && maxHeight !== 'none') {
       const el = contentRef.current;
       if (el) {
         setMaxHeight(`${el.scrollHeight}px`);
@@ -67,10 +82,14 @@ function CollapsibleSection({
   });
 
   return (
-    <div className="bg-card rounded-lg border border-border">
+    <div data-search-key={resolvedKey} className={`bg-card rounded-lg border border-border${hiddenBySearch ? ' hidden' : ''}`}>
       <button
         type="button"
         onClick={() => {
+          // While searching, expansion follows the match, not isOpen, so a
+          // toggle would silently flip the persisted state with no visible
+          // effect. Ignore it until the search is cleared.
+          if (searching) return;
           const next = !isOpen;
           setIsOpen(next);
           onToggle?.(next);
@@ -79,7 +98,7 @@ function CollapsibleSection({
       >
         <div className="flex-1 min-w-0">
           <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-          {subtitle && (
+          {subtitle && expanded && (
             <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>
           )}
         </div>
@@ -91,7 +110,7 @@ function CollapsibleSection({
           )}
           <svg
             className={`w-5 h-5 text-muted-foreground transition-transform duration-200 ${
-              isOpen ? 'rotate-180' : ''
+              expanded ? 'rotate-180' : ''
             }`}
             fill="none"
             viewBox="0 0 24 24"
@@ -105,11 +124,11 @@ function CollapsibleSection({
 
       <div
         ref={contentRef}
-        style={{ maxHeight }}
-        className={`overflow-hidden ${maxHeight !== 'none' && maxHeight !== '0px' ? 'transition-[max-height] duration-300 ease-in-out' : ''}`}
+        style={{ maxHeight: contentMaxHeight }}
+        className={`overflow-hidden ${!searching && maxHeight !== 'none' && maxHeight !== '0px' ? 'transition-[max-height] duration-300 ease-in-out' : ''}`}
       >
         <div className="px-4 pb-4 sm:px-6 sm:pb-6">
-          {(!unmountWhenClosed || isOpen) && children}
+          {(!unmountWhenClosed || isOpen || matchesSearch) && children}
         </div>
       </div>
     </div>
